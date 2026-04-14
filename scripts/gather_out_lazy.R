@@ -72,6 +72,8 @@ for (dir in jobsdirs) {
   }
 }
 
+jobsdirs <- map_chr(out_dirs, function(x) fs::path(x, "..") |> fs::path_real())
+
 # ..............................................................................
 # ---- Get unique output directory names ----
 # ..............................................................................
