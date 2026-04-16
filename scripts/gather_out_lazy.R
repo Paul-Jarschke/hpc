@@ -96,6 +96,7 @@ for (dir in out_dirs) {
 
     if (!dir_exists(subdir_path)) {
       cat("Does not exist: ", subdir_path, "\n")
+      i <- i + 1
       next
     }
 
