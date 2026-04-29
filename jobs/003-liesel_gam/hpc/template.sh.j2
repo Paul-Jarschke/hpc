@@ -9,26 +9,18 @@
 #SBATCH --array=1-{{N_REMAINING}}%{{SBATCH_ARRAY_MAX_CONCURRENT}}
 #SBATCH --mail-type=all
 
-# -e: Exit the script immediately if any command returns a non-zero exit status.
-# -o pipefail: A pipeline fails if any command in the pipeline fails, not just the last one.
-# set -eo pipefail
+cd $HOME/{{HPC_PROJECT_DIR}}
 
 source ~/.bashrc
 source ~/.dotenv
 
-cd $HOME/{{HPC_PROJECT_DIR}}
-
 micromamba activate r-4.5
 
-IDX=$SLURM_ARRAY_TASK_ID
-JOBROW=$(printf '%s\n' "{{CONDITION_INDICES}}" | sed -n "${IDX}p")
-PADDED_JOBROW=$(printf "%04d" "$JOBROW")
-
-# Optional: skip if already finished
-if [ -e "{{FINISHED_DIR}}/$JOBROW" ]; then
-  echo "Condition $JOBROW already finished. Skipping."
-  exit 0
-fi
+# Random startup delay to avoid thundering herd effects
+MAX_DELAY=30
+DELAY=$(( RANDOM % (MAX_DELAY + 1) ))
+echo "Sleeping for $DELAY seconds before starting."
+sleep "$DELAY"
 
 BASE="$HOME/{{HPC_PROJECT_DIR}}/{{JOBDIR}}/run"
 
@@ -59,47 +51,95 @@ rsync -a \
   --exclude='slurm-out' \
   "$HOME/{{HPC_PROJECT_DIR}}/{{JOBDIR}}/" "$RUNDIR/"
 
+
 ln -s "$HOME/{{HPC_PROJECT_DIR}}/renv" $RUNDIR/renv
 ln -s "$HOME/{{HPC_PROJECT_DIR}}/renv.lock" $RUNDIR/renv.lock
-
-LOGFILE="$HOME/{{HPC_PROJECT_DIR}}/{{JOBDIR}}/log/captured-run-${PADDED_JOBROW}.log"
+ln -s "$HOME/{{HPC_PROJECT_DIR}}/data" $LOCAL_TMPDIR/{{HPC_PROJECT_DIR}}/data
 
 cd $RUNDIR
 
-# copy .Rprofile into rundir
-cp -f "$HOME/{{HPC_PROJECT_DIR}}/.Rprofile" "$RUNDIR/.Rprofile"
 
-# append renv activation (only if not already present)
-# cat "$RUNDIR/.Rprofile"
-Rscript -e ".libPaths()"
-
-# ln -s "$HOME/{{HPC_PROJECT_DIR}}/.venv" $RUNDIR/.venv
-source $HOME/{{HPC_PROJECT_DIR}}/.venv/bin/activate
+ln -s "$HOME/{{HPC_PROJECT_DIR}}/.venv" $RUNDIR/.venv
+source $RUNDIR/.venv/bin/activate
 which python
 python --version
 pip list
 
 # these lines are important for the correct python environment if knitr is being
 # used as the engine in quarto
-export RENV_PYTHON="$HOME/{{HPC_PROJECT_DIR}}/.venv/bin/python"
-export RETICULATE_PYTHON="$HOME/{{HPC_PROJECT_DIR}}/.venv/bin/python"
+export RENV_PYTHON="$RUNDIR/.venv/bin/python"
+export RETICULATE_PYTHON="$RUNDIR/.venv/bin/python"
+export IPYTHONDIR="$RUNDIR/ipython"
+mkdir -p "$IPYTHONDIR/profile_default"
+
+# copy .Rprofile into rundir
+cp -f "$HOME/{{HPC_PROJECT_DIR}}/.Rprofile" "$RUNDIR/.Rprofile"
+
+# append renv activation (only if not already present)
+# cat "$RUNDIR/.Rprofile"
+Rscript -e ".libPaths(); cat('RETICULATE_PYTHON=', Sys.getenv('RETICULATE_PYTHON'), '\n')"
 
 
-# NO_COLOR and TERM=dumb are just so that the captured _output
-# from quarto is not rendered weirdly in the log file
-NO_COLOR=1 TERM=dumb quarto render $RUNDIR/run.$EXT \
-    --output - \
-    --to gfm \
-    --execute \
-    -P JOB_ROW:$JOBROW \
-    -P JOB_DIR:$RUNDIR \
-    -P JOB_TESTING:False \
-    >> $LOGFILE 2>&1
+# the following is for deactivating colored output in jupyter notebooks
+# the intention is to make error messages appear better in the captured output
+
+cat > "$IPYTHONDIR/profile_default/ipython_kernel_config.py" <<'PY'
+c = get_config()
+c.InteractiveShell.colors = "NoColor"
+c.ZMQInteractiveShell.colors = "NoColor"
+PY
+# end of code for deactivating colored output in jupyter notebooks
 
 
-# copy output back from rundir into jobdir
-rsync -a --remove-source-files "$RUNDIR/log/"       "$HOME/{{HPC_PROJECT_DIR}}/{{JOBDIR}}/log/"
-rsync -a --remove-source-files "$RUNDIR/out/"       "$HOME/{{HPC_PROJECT_DIR}}/{{JOBDIR}}/out/"
-rsync -a --remove-source-files "$RUNDIR/slurm-err/" "$HOME/{{HPC_PROJECT_DIR}}/{{JOBDIR}}/slurm-err/"
-rsync -a --remove-source-files "$RUNDIR/slurm-out/" "$HOME/{{HPC_PROJECT_DIR}}/{{JOBDIR}}/slurm-out/"
-rsync -a --remove-source-files "$RUNDIR/finished/"  "$HOME/{{HPC_PROJECT_DIR}}/{{JOBDIR}}/finished/"
+IDX=$(( ($SLURM_ARRAY_TASK_ID - 1) * {{JOBROWS_PER_ARRAY_SUBJOB}} + 1 ))
+
+
+for ((i = 0; i < {{JOBROWS_PER_ARRAY_SUBJOB}}; i++)); do
+    CURRENT_IDX=$((IDX + i))
+    JOBROW=$(printf '%s\n' "{{CONDITION_INDICES}}" | sed -n "${CURRENT_IDX}p")
+    
+    PADDED_JOBROW=$(printf "%04d" "$JOBROW")
+
+    echo "============================================================"
+    echo "DEBUG SLURM_JOB_ID=${SLURM_JOB_ID}"
+    echo "DEBUG SLURM_ARRAY_TASK_ID=${SLURM_ARRAY_TASK_ID}"
+    echo "DEBUG i=$i"
+    echo "DEBUG IDX=$IDX"
+    echo "DEBUG CURRENT_IDX=$CURRENT_IDX"
+    echo "DEBUG JOBROW=$JOBROW"
+    echo "DEBUG PADDED_JOBROW=$PADDED_JOBROW"
+    echo "DEBUG RUNDIR=$RUNDIR"
+
+    echo "DEBUG RENV_PYTHON=${RENV_PYTHON}"
+    echo "DEBUG RETICULATE_PYTHON=${RETICULATE_PYTHON}"
+    echo "DEBUG VIRTUAL_ENV=${VIRTUAL_ENV}"
+
+    # Optional: skip if already finished
+    if [ -e "{{FINISHED_DIR}}/$JOBROW" ]; then
+      echo "Condition $JOBROW already finished. Skipping."
+      continue
+    fi
+
+    LOGFILE="$HOME/{{HPC_PROJECT_DIR}}/{{JOBDIR}}/log/captured-run-${PADDED_JOBROW}.log"
+
+    # NO_COLOR and TERM=dumb are just so that the captured _output
+    # from quarto is not rendered weirdly in the log file
+    NO_COLOR=1 TERM=dumb quarto render $RUNDIR/run.$EXT \
+        --output - \
+        --to gfm \
+        --execute \
+        -P JOB_ROW:$JOBROW \
+        -P JOB_DIR:$RUNDIR \
+        -P JOB_TESTING:False \
+        >> $LOGFILE 2>&1
+    
+    # copy output back from rundir into jobdir
+    rsync -a --remove-source-files "$RUNDIR/log/"       "$HOME/{{HPC_PROJECT_DIR}}/{{JOBDIR}}/log/"
+    rsync -a --remove-source-files "$RUNDIR/out/"       "$HOME/{{HPC_PROJECT_DIR}}/{{JOBDIR}}/out/"
+    rsync -a --remove-source-files "$RUNDIR/slurm-err/" "$HOME/{{HPC_PROJECT_DIR}}/{{JOBDIR}}/slurm-err/"
+    rsync -a --remove-source-files "$RUNDIR/slurm-out/" "$HOME/{{HPC_PROJECT_DIR}}/{{JOBDIR}}/slurm-out/"
+    rsync -a --remove-source-files "$RUNDIR/finished/"  "$HOME/{{HPC_PROJECT_DIR}}/{{JOBDIR}}/finished/"
+    rm -f "$HOME/{{HPC_PROJECT_DIR}}/{{JOBDIR}}/log/tmp-run-${PADDED_JOBROW}.log"
+done
+
+

@@ -1,5 +1,9 @@
 #!/bin/bash
 
+# ------------------------------------------------------------------------------
+# Run this to download the output data from the server
+# ------------------------------------------------------------------------------
+
 set -e  # Exit immediately if a command exits with a non-zero status
 
 # Variables

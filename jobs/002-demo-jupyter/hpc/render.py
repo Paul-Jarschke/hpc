@@ -73,11 +73,18 @@ def render_submit_script(jobdir: Path):
     with open(jobdir / "resources.json", "r", encoding="utf-8") as f:
         resources = json.load(f)
 
+    n_per_array = resources.pop("HPC_NUMBER_OF_JOBS_TO_SUBMIT")
+
+    print(f"Remaining: {len(remaining_rows)} jobs.")
+    print(f"Submitting: {n_per_array} jobs.")
+    this_batch = remaining_rows[:n_per_array]
+    print(f"Submitting: {' '.join(this_batch)}")
+
     context = resources | {
         # ---------------------------------------------
         # constant or automatically inferred settings
-        "N_REMAINING": len(remaining_rows),
-        "CONDITION_INDICES": "\n".join(remaining_rows),
+        "N_REMAINING": len(this_batch),
+        "CONDITION_INDICES": "\n".join(this_batch),
         "JOBDIR": str(jobdir),
         "LOG_DIR": str(logdir),
         "FINISHED_DIR": str(finished_dir),
