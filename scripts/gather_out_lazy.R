@@ -57,11 +57,11 @@ for (dir in jobsdirs) {
   }
 
   if (!is.null(include)) {
-    if (any(str_starts(fs::path_file(dir), include[, 1]))) {
-      j <- str_which(fs::path_file(dir), include[, 1])
-      out_dirs[[i]] <- path(dir, include[j, 2])
+    if (any(str_starts(fs::path_file(dir), include))) {
+      out_dirs[[i]] <- path(dir, "out")
       i <- i + 1
     }
+    next
   }
 
   this_out_dir <- path(dir, "out")
@@ -96,7 +96,6 @@ for (dir in out_dirs) {
 
     if (!dir_exists(subdir_path)) {
       cat("Does not exist: ", subdir_path, "\n")
-      i <- i + 1
       next
     }
 
@@ -132,10 +131,10 @@ for (dir in out_dirs) {
     )
 
     jobname <- jobsdirs[i] |> fs::path_file()
+    print(jobname)
     out[[subdir]][[jobname]] <- df
-
-    i <- i + 1
   }
+  i <- i + 1
 }
 
 out |> names()
