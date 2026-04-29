@@ -44,6 +44,15 @@ the demo job `jobs/001-demo-knitr` as an example.
     - `SBATCH_ARRAY_MAX_CONCURRENT`: How many runs (rows of `params.csv`) can be
        executed by the HPC in parallel. Be civil and don't swamp the server with 
        thousands of parallel runs. I often use values between 50 and 100.
+    - `HPC_NUMBER_OF_JOBS_TO_SUBMIT`: How many jobs to actually submit. The GWGD HPC
+       by default allows a total of 1000 job submissions at a time, but your params.csv
+       may contain more rows than that. So choosing a value <= 1000 here ensures you are
+       in the allowed range.
+    - `JOBROWS_PER_ARRAY_SUBJOB`: Can be used to define how many rows of params.csv 
+       should be run by each job in the job array. For example, if you have 5000 rows
+       in params.csv and each job takes only 3 hours, you may choose 
+       HPC_NUMBER_OF_JOBS_TO_SUBMIT = 1000 and JOBROWS_PER_ARRAY_SUBJOB=5. Then you
+       will submit 1000 jobs, each of which runs 5 rows of params.csv.
 4. **Test submission** to HPC
     - Upload the input data to the HPC. By default, the input data are ignored via `.gitignore` to avoid committing large files to a Git repository. If your data is not large, you can simply remove this line from the `.gitignore`. Otherwise, you should upload your data manually to the HPC. This is often possible simply via drag-and-drop in the VS Code / Positron remote explorer.
     - Use a minimal `params.csv` with just one row that you are quite certain will run
