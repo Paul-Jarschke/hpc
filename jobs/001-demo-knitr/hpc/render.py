@@ -73,11 +73,17 @@ def render_submit_script(jobdir: Path):
     with open(jobdir / "resources.json", "r", encoding="utf-8") as f:
         resources = json.load(f)
 
+    print(f"Remaining: {len(remaining_rows)} jobs.")
+
+    n_per_array = resources.pop("HPC_NUMBER_OF_JOBS_TO_SUBMIT")
+
+    this_batch = remaining_rows[:n_per_array]
+
     context = resources | {
         # ---------------------------------------------
         # constant or automatically inferred settings
-        "N_REMAINING": len(remaining_rows),
-        "CONDITION_INDICES": "\n".join(remaining_rows),
+        "N_REMAINING": len(this_batch),
+        "CONDITION_INDICES": "\n".join(this_batch),
         "JOBDIR": str(jobdir),
         "LOG_DIR": str(logdir),
         "FINISHED_DIR": str(finished_dir),
@@ -85,7 +91,7 @@ def render_submit_script(jobdir: Path):
         "SLURM_STDOUT_DIR": str(jobdir / "slurm-out"),
         "SLURM_STDERR_DIR": str(jobdir / "slurm-err"),
         # assumes this script is executed on the server in the right working directory
-        "HPC_PROJECT_DIR": "git/hpc",
+        "HPC_PROJECT_DIR": os.environ.get("HPC_PROJECT_DIR"),
     }
 
     render_template(
