@@ -37,17 +37,16 @@ if __name__ == "__main__":
 
     submit = submit_script_template.format(
         hpc_project_dir=os.environ.get("HPC_PROJECT_DIR"),
-        jobdir=str(jobdir.relative_to(basedir)),
+        jobdir=jobdir.relative_to(basedir).as_posix(),
         jobname=jobdir.name,
     )
 
     run(
-        [str(basedir / "scripts/check_git_status.sh")],
+        ["C:/Program Files/Git/bin/bash.exe", str(basedir / "scripts/check_git_status.sh")],
         check=True,
     )
 
     run(
         ["ssh", "-q", os.environ.get("HPC_SSH_ALIAS"), "bash", "-s"],
-        input=submit,
-        text=True,
+        input=submit.replace("\r\n", "\n").encode("utf-8"),
     )

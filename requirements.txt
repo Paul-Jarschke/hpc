@@ -119,7 +119,7 @@ typing_extensions==4.15.0
 tzdata==2025.3
 urllib3==2.6.3
 uvicorn==0.40.0
-uvloop==0.22.1
+uvloop==0.22.1; sys_platform != 'win32'
 watchfiles==1.1.1
 wcwidth==0.2.14
 websockets==16.0
