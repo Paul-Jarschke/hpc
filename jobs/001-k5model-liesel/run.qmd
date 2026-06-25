@@ -1,0 +1,264 @@
+---
+title: "001-k5model-liesel — HBMNL mixture fit"
+format:
+  html:
+    toc: true
+    number-sections: true
+engine: jupyter
+execute:
+  timeout: 7200  # seconds; must exceed the slowest single fit (SLURM is the real wall-clock cap)
+---
+
+Fits ONE overspecified (K_MODEL = 5) hierarchical Bayesian mixture multinomial
+logit model to one simulated dataset, with the sampler / chains / dataset chosen
+by the `params.csv` row `JOB_ROW`. Writes tidy one-row-per-X summary CSVs to
+`out/<type>/`. Vendored model + sampler + analysis code lives in `src/`.
+
+CAPSLOCK variables are harness machinery — don't rename them.
+
+## Parameters
+
+```{python}
+# | tags: [parameters]
+JOB_DIR: str = "jobs/001-k5model-liesel"
+JOB_ROW: int = 0
+JOB_TESTING: bool = True
+```
+
+## Setup
+
+```{python}
+# | label: imports
+import io
+import json
+import logging
+import sys
+import time
+from datetime import datetime
+from pathlib import Path
+
+import numpy as np
+import pandas as pd
+
+print("python:", sys.executable)
+print("cwd   :", Path.cwd())
+```
+
+```{python}
+# | label: load-params-row
+JOB_PATH = Path(JOB_DIR)
+PARAMS = pd.read_csv(JOB_PATH / "params.csv").iloc[JOB_ROW, :]
+print(PARAMS)
+```
+
+```{python}
+# | label: identifier
+now = datetime.now().strftime("%Y-%m-%d-%H%M")
+JOB_IDENTIFIER = JOB_PATH.name + "-" + f"{JOB_ROW:04d}" + "-" + now
+PARAMS["job"] = JOB_PATH.name
+PARAMS["run"] = JOB_IDENTIFIER
+```
+
+```{python}
+# | label: directories
+DIR_LOG = JOB_PATH / "log"
+DIR_OUT = JOB_PATH / "out"
+DIR_FIN = JOB_PATH / "finished"
+if JOB_TESTING:
+    DIR_OUT = JOB_PATH / "out-test"
+for d in (DIR_LOG, DIR_OUT, DIR_FIN):
+    d.mkdir(exist_ok=True)
+
+FINFILE = DIR_FIN / str(JOB_ROW)
+if FINFILE.exists() and not JOB_TESTING:
+    raise RuntimeError(
+        f"Row {JOB_ROW} of '{JOB_PATH.name}' is already finished. Delete "
+        f"{FINFILE} to re-run."
+    )
+```
+
+```{python}
+# | label: logger
+formatter = logging.Formatter("%(asctime)s - %(levelname)s - %(message)s")
+handler = logging.FileHandler(filename=DIR_LOG / f"run-{JOB_ROW:04d}.log")
+handler.setFormatter(formatter)
+logger = logging.getLogger(str(JOB_PATH.name))
+logger.addHandler(handler)
+logger.setLevel(logging.INFO)
+logger.info(f"Job started: {JOB_IDENTIFIER}")
+```
+
+## Model code
+
+### Make vendored study code importable
+
+`src/` (model, samplers, analysis, summaries) is resolved relative to the job
+directory, so imports work both locally and inside the HPC node-local rundir.
+
+```{python}
+# | label: import-vendored
+JOB_PATH_ABS = JOB_PATH.resolve()
+if str(JOB_PATH_ABS) not in sys.path:
+    sys.path.insert(0, str(JOB_PATH_ABS))
+
+import jax  # noqa: F401
+import jax.numpy as jnp
+
+from src.mixturemodel import build_mixture_hbmnl_model
+from src.inference.nuts import run_nuts_inference_mixture_hbmnl
+from src.inference.hmc import run_hmc_inference_mixture_hbmnl
+from src.summaries import build_summaries
+
+print("jax backend:", jax.default_backend())
+```
+
+### Extract run settings from the params row
+
+```{python}
+# | label: run-settings
+dataset_key = str(PARAMS["dataset_key"])
+k_model     = int(PARAMS["k_model"])
+sampler     = str(PARAMS["sampler"])
+n_chains    = int(PARAMS["n_chains"])
+warmup      = int(PARAMS["warmup"])
+posterior   = int(PARAMS["posterior"])
+seed        = int(PARAMS["seed"])
+a_mu        = float(PARAMS["a_mu"])
+a_delta     = float(PARAMS["a_delta"])
+dirichlet_a = float(PARAMS["dirichlet_a"])
+num_integration_steps = int(PARAMS["num_integration_steps"])
+
+# Testing shortcut: short MCMC so the whole pipeline runs quickly. Warmup must
+# stay above goose's Stan-window minimum (init + term + base ~ 150).
+if JOB_TESTING:
+    warmup, posterior = 200, 100
+    logger.info(f"JOB_TESTING: warmup={warmup}, posterior={posterior}")
+```
+
+### Load the dataset (with ground truth)
+
+`data/in/` sits two levels above the job dir — true both locally and on the HPC
+(where `template.sh.j2` symlinks `data` next to the rundir).
+
+```{python}
+# | label: load-data
+DATA_DIR = JOB_PATH_ABS.parent.parent / "data" / "in" / "k5model_mixture"
+data_path = DATA_DIR / f"{dataset_key}.json"
+logger.info(f"Loading {data_path}")
+with open(data_path) as f:
+    raw = json.load(f)
+
+P = int(raw["n_params"])
+choice_data = {
+    "X":        jnp.array(raw["X"]),
+    "y":        jnp.array(raw["y"]),
+    "unit_idx": jnp.array(raw["unit_idx"]),
+    "Z":        jnp.array(raw["Z"]) if raw.get("Z") is not None else None,
+    "n_params": P,
+    "n_units":  int(raw["n_units"]),
+    "n_demos":  int(raw.get("n_demos", 0)),
+}
+print(f"dataset={dataset_key}  K_true={raw['K']}  N={choice_data['n_units']}  P={P}")
+print(f"sampler={sampler}  K_model={k_model}  chains={n_chains}  warmup={warmup}  posterior={posterior}")
+```
+
+### Build the model
+
+```{python}
+# | label: build-model
+model = build_mixture_hbmnl_model(
+    data_dict=choice_data, K=k_model,
+    A_delta=a_delta, a_mu=a_mu, dirichlet_a=dirichlet_a,
+)
+```
+
+### Run the sampler (capturing the goose log for error counts)
+
+```{python}
+# | label: sample
+log_buffer = io.StringIO()
+_gh = logging.StreamHandler(log_buffer)
+_gh.setFormatter(formatter)
+_liesel_logger = logging.getLogger("liesel")
+_liesel_logger.setLevel(logging.INFO)
+_liesel_logger.addHandler(_gh)
+
+t0 = time.time()
+if sampler == "nuts":
+    mcmc_results, posterior_samples = run_nuts_inference_mixture_hbmnl(
+        model=model, data_dict=choice_data, K=k_model,
+        chains=n_chains, warmup=warmup, posterior=posterior, seed=seed,
+    )
+elif sampler == "hmc":
+    mcmc_results, posterior_samples = run_hmc_inference_mixture_hbmnl(
+        model=model, data_dict=choice_data, K=k_model,
+        num_integration_steps=num_integration_steps,
+        chains=n_chains, warmup=warmup, posterior=posterior, seed=seed,
+    )
+else:
+    raise ValueError(f"Unknown sampler: {sampler}")
+runtime_s = time.time() - t0
+
+_liesel_logger.removeHandler(_gh)
+sampling_log_text = log_buffer.getvalue()
+logger.info(f"Sampling done in {runtime_s:.1f}s")
+print(f"Sampling done in {runtime_s:.1f}s")
+```
+
+### Build the tidy summary tables
+
+```{python}
+# | label: summaries
+cond = {
+    "job": PARAMS["job"], "run": PARAMS["run"], "job_row": int(JOB_ROW),
+    "dataset_key": dataset_key, "scenario": str(PARAMS.get("scenario", "")),
+    "k_true": int(raw["K"]), "data_seed": int(PARAMS.get("data_seed", -1)),
+    "k_model": k_model, "sampler": sampler, "n_chains": n_chains,
+    "warmup": warmup, "posterior": posterior, "seed": seed,
+    "a_mu": a_mu, "a_delta": a_delta, "dirichlet_a": dirichlet_a,
+    "num_integration_steps": num_integration_steps if sampler == "hmc" else None,
+}
+tables = build_summaries(posterior_samples, raw, cond, runtime_s, sampling_log_text)
+for name, df in tables.items():
+    print(f"{name:14s} {df.shape}")
+tables["diagnostics"]
+```
+
+## Save results
+
+One tidy CSV per output type (gathered into `data/out/` later). The heavy
+component-level posterior is kept on the HPC for optional deep-dive analysis.
+
+```{python}
+# | label: save-results
+for name, df in tables.items():
+    out_sub = DIR_OUT / name
+    out_sub.mkdir(parents=True, exist_ok=True)
+    df.to_csv(out_sub / f"{name}-row{JOB_ROW:04d}.csv", index=False)
+    logger.info(f"wrote {name}-row{JOB_ROW:04d}.csv ({df.shape[0]} rows)")
+```
+
+```{python}
+# | label: save-posterior
+# Component-level draws (mu/sigma/std/pvec) only — NOT the per-unit beta_i bulk.
+from src.analysis import export_posterior_to_pickle
+
+post_name = f"{dataset_key}__k{k_model}_{sampler}_c{n_chains}.pkl"
+try:
+    export_posterior_to_pickle(
+        samples=posterior_samples, K=k_model, P=P,
+        filename=post_name, output_dir=str(DIR_OUT / "posterior"),
+    )
+except Exception as e:
+    logger.warning(f"posterior export failed: {e}")
+    print(f"posterior export failed: {e}")
+```
+
+## Mark job as finished
+
+```{python}
+# | label: mark-finished
+if not JOB_TESTING:
+    FINFILE.touch()
+    logger.info("Marked finished.")
+```

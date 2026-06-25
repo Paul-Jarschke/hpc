@@ -1,0 +1,4 @@
+# Keep HPC shell scripts and Jinja templates LF-only. CRLF line endings break
+# bash heredocs / shebangs on the Linux cluster, and this repo is edited on Windows.
+*.sh  text eol=lf
+*.j2  text eol=lf

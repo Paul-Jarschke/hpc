@@ -4,6 +4,8 @@ jobs/*/out
 jobs/*/out-test
 _output/
 .venv/
+__pycache__/
+*.pyc
 .quarto/
 /.quarto/
 data/in
