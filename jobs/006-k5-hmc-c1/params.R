@@ -1,5 +1,9 @@
 library(tidyverse)
 
+# Number of replicate seeds per scenario to include (data_seed in 1..MAX_DATA_SEED).
+# Set to 50 for the full grid; a smaller value runs a quick subset.
+MAX_DATA_SEED <- 5
+
 # ..............................................................................
 # Build params.csv for ONE (sampler x n_chains) slice of the k5model_mixture
 # experiment. The sampler and chain count are read from THIS job's directory
@@ -41,6 +45,7 @@ manifest <- read_csv(
 )
 
 params <- manifest |>
+  filter(data_seed <= MAX_DATA_SEED) |>
   select(dataset_key, scenario, k_true, data_seed) |>
   mutate(
     sampler               = sampler,
