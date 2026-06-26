@@ -2,7 +2,10 @@ from pathlib import Path
 from subprocess import run
 
 SUBMIT = [
-    "001",
+    "004",
+    "005",
+    "006",
+    "007",
 ]
 
 JOBS_DIRECTORY: str = "jobs"

@@ -13,6 +13,7 @@ data/out
 .vscode
 .env
 CLAUDE.md
+USAGE.md
 */*/hpc/sbatch.sh
 **/*.quarto_ipynb
 */*/slurm-*

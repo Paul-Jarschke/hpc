@@ -18,6 +18,10 @@ source .venv/bin/activate
 Rscript -e 'renv::status()'
 Rscript -e 'renv::restore()'
 
+# Generate the datasets if missing. data/in is gitignored, so it cannot ride along with
+# `git pull`; this bootstraps it on the first submit and is skipped once it exists.
+[ -f data/in/k5model_mixture/manifest.csv ] || python data/generate_mixture_data.py
+
 export HPC_PROJECT_DIR={hpc_project_dir}
 python {jobdir}/hpc/render.py
 
