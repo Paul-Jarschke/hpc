@@ -1,5 +1,5 @@
 ---
-title: "001-k5model-liesel — HBMNL mixture fit"
+title: "k5-mixture HBMNL fit — saves full posterior for post-hoc analysis"
 format:
   html:
     toc: true
@@ -9,10 +9,12 @@ execute:
   timeout: 7200  # seconds; must exceed the slowest single fit (SLURM is the real wall-clock cap)
 ---
 
-Fits ONE overspecified (K_MODEL = 5) hierarchical Bayesian mixture multinomial
-logit model to one simulated dataset, with the sampler / chains / dataset chosen
-by the `params.csv` row `JOB_ROW`. Writes tidy one-row-per-X summary CSVs to
-`out/<type>/`. Vendored model + sampler + analysis code lives in `src/`.
+Fits ONE overspecified (K_MODEL = 5) hierarchical Bayesian mixture multinomial logit
+model to one simulated dataset (sampler / chains / dataset come from the `params.csv`
+row `JOB_ROW`), then saves the **full posterior** + `meta.json`. All downstream analysis
+(ECR relabeling, marginal comparison, ess/rhat, mixture moments) is reproduced post-hoc
+from these by `analysis/post_process.py`. Shared model/sampler code lives in the
+repo-root `src/`.
 
 CAPSLOCK variables are harness machinery — don't rename them.
 
@@ -20,7 +22,7 @@ CAPSLOCK variables are harness machinery — don't rename them.
 
 ```{python}
 # | tags: [parameters]
-JOB_DIR: str = "jobs/001-k5model-liesel"
+JOB_DIR: str = "jobs/006-k5-hmc-c1"
 JOB_ROW: int = 0
 JOB_TESTING: bool = True
 ```
@@ -32,6 +34,8 @@ JOB_TESTING: bool = True
 import io
 import json
 import logging
+import pickle
+import re
 import sys
 import time
 from datetime import datetime
@@ -72,8 +76,7 @@ for d in (DIR_LOG, DIR_OUT, DIR_FIN):
 FINFILE = DIR_FIN / str(JOB_ROW)
 if FINFILE.exists() and not JOB_TESTING:
     raise RuntimeError(
-        f"Row {JOB_ROW} of '{JOB_PATH.name}' is already finished. Delete "
-        f"{FINFILE} to re-run."
+        f"Row {JOB_ROW} of '{JOB_PATH.name}' is already finished. Delete {FINFILE} to re-run."
     )
 ```
 
@@ -90,16 +93,16 @@ logger.info(f"Job started: {JOB_IDENTIFIER}")
 
 ## Model code
 
-### Make vendored study code importable
-
-`src/` (model, samplers, analysis, summaries) is resolved relative to the job
-directory, so imports work both locally and inside the HPC node-local rundir.
+### Make shared src/ importable
 
 ```{python}
 # | label: import-vendored
 JOB_PATH_ABS = JOB_PATH.resolve()
-if str(JOB_PATH_ABS) not in sys.path:
-    sys.path.insert(0, str(JOB_PATH_ABS))
+# Shared src/ is at the repo root locally (JOB_PATH/../..) and is symlinked into the
+# node-local rundir on the HPC (JOB_PATH/src). Add both so `import src.*` resolves either way.
+for _p in (JOB_PATH_ABS, JOB_PATH_ABS.parent.parent):
+    if str(_p) not in sys.path:
+        sys.path.insert(0, str(_p))
 
 import jax  # noqa: F401
 import jax.numpy as jnp
@@ -107,12 +110,12 @@ import jax.numpy as jnp
 from src.mixturemodel import build_mixture_hbmnl_model
 from src.inference.nuts import run_nuts_inference_mixture_hbmnl
 from src.inference.hmc import run_hmc_inference_mixture_hbmnl
-from src.summaries import build_summaries
+from src import analysis  # invariant convergence (cheap; for the meta health-check)
 
 print("jax backend:", jax.default_backend())
 ```
 
-### Extract run settings from the params row
+### Extract run settings
 
 ```{python}
 # | label: run-settings
@@ -128,8 +131,7 @@ a_delta     = float(PARAMS["a_delta"])
 dirichlet_a = float(PARAMS["dirichlet_a"])
 num_integration_steps = int(PARAMS["num_integration_steps"])
 
-# Testing shortcut: short MCMC so the whole pipeline runs quickly. Warmup must
-# stay above goose's Stan-window minimum (init + term + base ~ 150).
+# Testing shortcut: short MCMC (still above goose's Stan-window minimum ~150).
 if JOB_TESTING:
     warmup, posterior = 200, 100
     logger.info(f"JOB_TESTING: warmup={warmup}, posterior={posterior}")
@@ -137,8 +139,8 @@ if JOB_TESTING:
 
 ### Load the dataset (with ground truth)
 
-`data/in/` sits two levels above the job dir — true both locally and on the HPC
-(where `template.sh.j2` symlinks `data` next to the rundir).
+`data/in/` is two levels above the job dir — true locally (cwd = project root) and on
+the HPC (where `template.sh.j2` symlinks `data` next to the rundir).
 
 ```{python}
 # | label: load-data
@@ -172,7 +174,7 @@ model = build_mixture_hbmnl_model(
 )
 ```
 
-### Run the sampler (capturing the goose log for error counts)
+### Run the sampler (capturing the goose log)
 
 ```{python}
 # | label: sample
@@ -205,53 +207,67 @@ logger.info(f"Sampling done in {runtime_s:.1f}s")
 print(f"Sampling done in {runtime_s:.1f}s")
 ```
 
-### Build the tidy summary tables
+## Save the full posterior + meta
+
+The complete posterior (chain structure `(C,S,…)` **+ `beta_i`**) is saved so ECR,
+marginal comparison, convergence and moments can all be reproduced post-hoc.
+`meta.json` carries the run conditions, timing, sampling-error count and a quick
+label-invariant convergence number for at-a-glance monitoring.
 
 ```{python}
-# | label: summaries
-cond = {
-    "job": PARAMS["job"], "run": PARAMS["run"], "job_row": int(JOB_ROW),
+# | label: save-posterior-raw
+RUN_KEY = f"{dataset_key}__k{k_model}_{sampler}_c{n_chains}"
+
+post_np = {k: np.asarray(v) for k, v in posterior_samples.items()}
+DIR_POST = DIR_OUT / "posterior_raw"
+DIR_POST.mkdir(parents=True, exist_ok=True)
+with open(DIR_POST / f"{RUN_KEY}.pkl", "wb") as f:
+    pickle.dump(post_np, f)
+print("saved posterior_raw:", {k: tuple(v.shape) for k, v in post_np.items()})
+```
+
+```{python}
+# | label: save-meta
+def _count_sampling_errors(log_text):
+    total = 0
+    for line in log_text.splitlines():
+        if "Errors per chain" in line:
+            m = re.search(r":\s*(\d+)\s*/\s*\d+\s*transitions", line)
+            if m:
+                total += int(m.group(1))
+    return total
+
+# Cheap label-invariant convergence (no beta_i) for at-a-glance monitoring.
+try:
+    conv = analysis.invariant_convergence_summary(posterior_samples, include_cov=True)
+    rhat_max = float(np.nanmax(conv["rhat"].values))
+    ess_min = float(np.nanmin(conv["ess"].values))
+except Exception as e:
+    logger.warning(f"invariant convergence failed: {e}")
+    rhat_max, ess_min = None, None
+
+meta = {
+    "job": str(PARAMS["job"]), "run": str(PARAMS["run"]), "job_row": int(JOB_ROW),
+    "run_key": RUN_KEY,
     "dataset_key": dataset_key, "scenario": str(PARAMS.get("scenario", "")),
     "k_true": int(raw["K"]), "data_seed": int(PARAMS.get("data_seed", -1)),
     "k_model": k_model, "sampler": sampler, "n_chains": n_chains,
     "warmup": warmup, "posterior": posterior, "seed": seed,
     "a_mu": a_mu, "a_delta": a_delta, "dirichlet_a": dirichlet_a,
     "num_integration_steps": num_integration_steps if sampler == "hmc" else None,
+    "n_units": choice_data["n_units"], "n_params": P, "n_demos": choice_data["n_demos"],
+    "runtime_s": round(runtime_s, 2),
+    "n_sampling_errors": _count_sampling_errors(sampling_log_text),
+    "invariant_rhat_max": rhat_max, "invariant_ess_min": ess_min,
+    "posterior_shapes": {k: list(v.shape) for k, v in post_np.items()},
+    "finished_at": datetime.now().isoformat(timespec="seconds"),
 }
-tables = build_summaries(posterior_samples, raw, cond, runtime_s, sampling_log_text)
-for name, df in tables.items():
-    print(f"{name:14s} {df.shape}")
-tables["diagnostics"]
-```
-
-## Save results
-
-One tidy CSV per output type (gathered into `data/out/` later). The heavy
-component-level posterior is kept on the HPC for optional deep-dive analysis.
-
-```{python}
-# | label: save-results
-for name, df in tables.items():
-    out_sub = DIR_OUT / name
-    out_sub.mkdir(parents=True, exist_ok=True)
-    df.to_csv(out_sub / f"{name}-row{JOB_ROW:04d}.csv", index=False)
-    logger.info(f"wrote {name}-row{JOB_ROW:04d}.csv ({df.shape[0]} rows)")
-```
-
-```{python}
-# | label: save-posterior
-# Component-level draws (mu/sigma/std/pvec) only — NOT the per-unit beta_i bulk.
-from src.analysis import export_posterior_to_pickle
-
-post_name = f"{dataset_key}__k{k_model}_{sampler}_c{n_chains}.pkl"
-try:
-    export_posterior_to_pickle(
-        samples=posterior_samples, K=k_model, P=P,
-        filename=post_name, output_dir=str(DIR_OUT / "posterior"),
-    )
-except Exception as e:
-    logger.warning(f"posterior export failed: {e}")
-    print(f"posterior export failed: {e}")
+DIR_META = DIR_OUT / "meta"
+DIR_META.mkdir(parents=True, exist_ok=True)
+with open(DIR_META / f"{RUN_KEY}.json", "w") as f:
+    json.dump(meta, f, indent=2)
+print("meta:", json.dumps({k: meta[k] for k in
+      ("run_key", "runtime_s", "n_sampling_errors", "invariant_rhat_max", "invariant_ess_min")}))
 ```
 
 ## Mark job as finished

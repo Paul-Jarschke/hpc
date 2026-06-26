@@ -1,0 +1,2 @@
+dataset_key,scenario,k_true,data_seed,sampler,n_chains,k_model,warmup,posterior,seed,a_mu,a_delta,dirichlet_a,num_integration_steps
+kt5_s01,5comp_equal,5,1,nuts,2,5,2000,10000,42,0.01,0.01,1.0,10
