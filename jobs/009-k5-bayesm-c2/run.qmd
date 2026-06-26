@@ -1,0 +1,260 @@
+---
+title: "k5-mixture HBMNL fit — bayesm (rhierMnlRwMixture), saves full posterior"
+format:
+  html:
+    toc: true
+    number-sections: true
+engine: knitr
+params:
+    JOB_DIR: NULL
+    JOB_ROW: 0          # zero-indexed row of params.csv
+    JOB_TESTING: true
+---
+
+Fits ONE overspecified (K_MODEL = 5) hierarchical Bayesian mixture multinomial logit
+model to one simulated dataset with **bayesm::rhierMnlRwMixture** (Gibbs + random-walk
+Metropolis), then saves the **full posterior** in the SAME canonical format the Liesel
+jobs (004-007) produce, so the identical `analysis/post_process.py` pipeline (ECR,
+marginal comparison, recovery tables, moments) works unchanged.
+
+Engine split: R does pure sampling and writes raw column-major draws; reticulate-Python
+rebuilds the TFP `FillScaleTriL` latent from the exported precision and assembles the
+canonical `posterior_raw.pkl`. CAPSLOCK variables are harness machinery — don't rename.
+
+## Setup
+
+### Resolve JOB_DIR (works in RStudio, VS Code/Positron, and the SLURM CLI render)
+
+```{r}
+#| label: get-default-params
+if (!exists("params")) {
+  current_file <- rstudioapi::getActiveDocumentContext()$path
+  knitr_params <- knitr::knit_params(readr::read_file(current_file))
+  params <- list()
+  for (param in names(knitr_params)) {
+    if (param == "JOB_DIR") {
+      current_dir <- fs::path_dir(current_file)
+      base_dir <- fs::path(current_dir, "..", "..") |> fs::path_real()
+      params[["JOB_DIR"]] <- fs::path_rel(current_dir, start = base_dir)
+    } else {
+      params[[param]] <- knitr_params[[param]]$value
+    }
+  }
+}
+```
+
+```{r}
+#| label: get-jobdir
+if (is.null(params$JOB_DIR)) {
+  current_dir <- knitr::current_input(dir = TRUE) |> fs::path_dir()
+  base_dir <- fs::path(current_dir, "..", "..") |> fs::path_real()
+  JOB_DIR <- fs::path_rel(current_dir, start = base_dir)
+} else {
+  JOB_DIR <- params$JOB_DIR
+}
+```
+
+### Harness machinery (params row, directories, logger)
+
+```{python}
+#| label: imports
+import json
+import logging
+import pickle
+import shutil
+import sys
+import tempfile
+import time
+from datetime import datetime
+from pathlib import Path
+
+import numpy as np
+import pandas as pd
+
+print("python:", sys.executable)
+print("cwd   :", Path.cwd())
+```
+
+```{python}
+#| label: load-params-row
+JOB_DIR: str = r.JOB_DIR
+JOB_ROW: int = int(r.params["JOB_ROW"])
+JOB_TESTING: bool = bool(r.params["JOB_TESTING"])
+
+JOB_PATH = Path(JOB_DIR)
+PARAMS = pd.read_csv(JOB_PATH / "params.csv").iloc[JOB_ROW, :]
+print(PARAMS)
+```
+
+```{python}
+#| label: identifier-and-dirs
+now = datetime.now().strftime("%Y-%m-%d-%H%M")
+JOB_IDENTIFIER = JOB_PATH.name + "-" + f"{JOB_ROW:04d}" + "-" + now
+PARAMS["job"] = JOB_PATH.name
+PARAMS["run"] = JOB_IDENTIFIER
+
+DIR_LOG = JOB_PATH / "log"
+DIR_OUT = JOB_PATH / "out"
+DIR_FIN = JOB_PATH / "finished"
+if JOB_TESTING:
+    DIR_OUT = JOB_PATH / "out-test"
+for d in (DIR_LOG, DIR_OUT, DIR_FIN):
+    d.mkdir(exist_ok=True)
+
+FINFILE = DIR_FIN / str(JOB_ROW)
+if FINFILE.exists() and not JOB_TESTING:
+    raise RuntimeError(
+        f"Row {JOB_ROW} of '{JOB_PATH.name}' is already finished. Delete {FINFILE} to re-run."
+    )
+
+formatter = logging.Formatter("%(asctime)s - %(levelname)s - %(message)s")
+handler = logging.FileHandler(filename=DIR_LOG / f"run-{JOB_ROW:04d}.log")
+handler.setFormatter(formatter)
+logger = logging.getLogger(str(JOB_PATH.name))
+logger.addHandler(handler)
+logger.setLevel(logging.INFO)
+logger.info(f"Job started: {JOB_IDENTIFIER}")
+```
+
+### Extract run settings + resolve shared src/ and data/
+
+The shared `src/` is at the repo root locally (`JOB_PATH/../../src`) and symlinked into
+the node-local rundir on the HPC (`JOB_PATH/src`). `data/in/` is two levels above the job
+dir either way (see `template.sh.j2`). Resolve both robustly.
+
+```{python}
+#| label: run-settings
+JOB_PATH_ABS = JOB_PATH.resolve()
+
+SRC_DIR = next((c for c in (JOB_PATH_ABS / "src", JOB_PATH_ABS.parent.parent / "src")
+                if (c / "bayesm_sampler.R").exists()), None)
+if SRC_DIR is None:
+    raise FileNotFoundError("Could not locate src/bayesm_sampler.R next to the job or at the repo root.")
+sys.path.insert(0, str(SRC_DIR.parent))           # so `import src.bayesm_convert` resolves
+
+dataset_key = str(PARAMS["dataset_key"])
+scenario    = str(PARAMS.get("scenario", "NA"))
+k_model     = int(PARAMS["k_model"])
+n_chains    = int(PARAMS["n_chains"])
+r_total     = int(PARAMS["r_total"])
+burn_in     = int(PARAMS["burn_in"])
+thin        = int(PARAMS["thin"])
+seed        = int(PARAMS["seed"])
+a_mu        = float(PARAMS["a_mu"])
+a_delta     = float(PARAMS["a_delta"])
+dirichlet_a = float(PARAMS["dirichlet_a"])
+
+# Testing shortcut: a short-but-valid chain (still > a few hundred retained draws).
+if JOB_TESTING:
+    r_total, burn_in, thin = 2000, 200, 2          # -> (2000-200)/2 = 900 retained
+    logger.info(f"JOB_TESTING: r_total={r_total}, burn_in={burn_in}, thin={thin}")
+
+DATA_DIR = JOB_PATH_ABS.parent.parent / "data" / "in" / "k5model_mixture"
+data_path = str(DATA_DIR / f"{dataset_key}.json")
+with open(data_path) as f:
+    raw = json.load(f)
+P = int(raw["n_params"])
+k_true = int(raw["K"])
+
+RUN_KEY = f"{dataset_key}__k{k_model}_bayesm_c{n_chains}"
+RAW_DIR = tempfile.mkdtemp(prefix=f"bayesm_{RUN_KEY}_")   # node-local scratch for the .bin bridge
+SRC_DIR_STR = str(SRC_DIR)
+
+print(f"dataset={dataset_key}  K_true={k_true}  N={raw['n_units']}  P={P}")
+print(f"sampler=bayesm  K_model={k_model}  chains={n_chains}  r_total={r_total}  burn_in={burn_in}  thin={thin}")
+print(f"raw bridge dir: {RAW_DIR}")
+```
+
+## Model code — bayesm sampling (R)
+
+Source the vendored sampler and fit. Settings come from the Python block via `py$`;
+the result is written to `RAW_DIR` as `.bin` draws + `dims.json` + `meta_r.json`.
+
+```{r}
+#| label: bayesm-fit
+source(file.path(py$SRC_DIR_STR, "bayesm_sampler.R"))
+run_bayesm_fit(
+  data_path   = py$data_path,
+  out_raw_dir = py$RAW_DIR,
+  k_model     = py$k_model,
+  chains      = py$n_chains,
+  r_total     = py$r_total,
+  burn_in     = py$burn_in,
+  thin        = py$thin,
+  seed        = py$seed,
+  a_mu        = py$a_mu,
+  a_delta     = py$a_delta,
+  dirichlet_a = py$dirichlet_a,
+  scenario    = py$scenario
+)
+```
+
+## Save the full posterior + meta (canonical format, identical to 004-007)
+
+```{python}
+#| label: convert-and-save
+from src.bayesm_convert import read_raw_draws
+
+post_np, meta_r, dims = read_raw_draws(RAW_DIR)
+runtime_s = float(meta_r.get("total_duration_s") or 0.0)
+
+DIR_POST = DIR_OUT / "posterior_raw"
+DIR_POST.mkdir(parents=True, exist_ok=True)
+with open(DIR_POST / f"{RUN_KEY}.pkl", "wb") as f:
+    pickle.dump(post_np, f)
+print("saved posterior_raw:", {k: tuple(v.shape) for k, v in post_np.items()})
+
+shutil.rmtree(RAW_DIR, ignore_errors=True)          # drop the large .bin bridge files
+```
+
+```{python}
+#| label: save-meta
+# Cheap label-invariant convergence (no beta_i) for at-a-glance monitoring — same as 004-007.
+try:
+    from src import analysis
+    conv = analysis.invariant_convergence_summary(post_np, include_cov=True)
+    rhat_max = float(np.nanmax(conv["rhat"].values))
+    ess_min = float(np.nanmin(conv["ess"].values))
+except Exception as e:
+    logger.warning(f"invariant convergence failed: {e}")
+    rhat_max, ess_min = None, None
+
+# COND_KEYS must be byte-identical to the Liesel meta so post_process discovers bayesm runs
+# (dataset_key, scenario, k_true, data_seed, k_model, sampler, n_chains). 'sampler' = bayesm.
+meta = {
+    "job": str(PARAMS["job"]), "run": str(PARAMS["run"]), "job_row": int(JOB_ROW),
+    "run_key": RUN_KEY,
+    "dataset_key": dataset_key, "scenario": scenario,
+    "k_true": k_true, "data_seed": int(PARAMS.get("data_seed", -1)),
+    "k_model": k_model, "sampler": "bayesm", "n_chains": n_chains,
+    "warmup": burn_in, "posterior": int(dims["n_samples"]), "seed": seed,
+    "a_mu": a_mu, "a_delta": a_delta, "dirichlet_a": dirichlet_a,
+    "num_integration_steps": None,
+    "n_units": int(raw["n_units"]), "n_params": P, "n_demos": int(raw.get("n_demos", 0)),
+    "runtime_s": round(runtime_s, 2),
+    "n_sampling_errors": 0,            # bayesm has no divergence/error log (Gibbs+RW-Metropolis)
+    "invariant_rhat_max": rhat_max, "invariant_ess_min": ess_min,
+    "posterior_shapes": {k: list(v.shape) for k, v in post_np.items()},
+    # bayesm-specific provenance
+    "r_total": r_total, "thin": thin, "burn_in": burn_in,
+    "seeds": meta_r.get("seeds"), "chain_durations_s": meta_r.get("durations_s"),
+    "loglike_mean": meta_r.get("loglike_mean"),
+    "bayesm_version": meta_r.get("bayesm_version"), "r_version": meta_r.get("r_version"),
+    "finished_at": datetime.now().isoformat(timespec="seconds"),
+}
+DIR_META = DIR_OUT / "meta"
+DIR_META.mkdir(parents=True, exist_ok=True)
+with open(DIR_META / f"{RUN_KEY}.json", "w") as f:
+    json.dump(meta, f, indent=2)
+print("meta:", json.dumps({k: meta[k] for k in
+      ("run_key", "runtime_s", "invariant_rhat_max", "invariant_ess_min", "bayesm_version")}))
+```
+
+## Mark job as finished
+
+```{python}
+#| label: mark-finished
+if not JOB_TESTING:
+    FINFILE.touch()
+    logger.info("Marked finished.")
+```

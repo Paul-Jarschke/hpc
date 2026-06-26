@@ -46,6 +46,12 @@ import pandas as pd
 import arviz as az
 from scipy.stats import norm, wasserstein_distance
 
+# numpy>=2.0 removed np.trapz in favour of np.trapezoid. This module uses np.trapz in
+# several places; restore it here so the notebooks (and any direct import) keep working
+# under the harness-pinned numpy 2.x without editing every call site.
+if not hasattr(np, "trapz") and hasattr(np, "trapezoid"):
+    np.trapz = np.trapezoid
+
 from src import analysis
 
 
