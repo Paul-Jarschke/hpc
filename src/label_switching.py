@@ -272,11 +272,11 @@ def component_convergence_table(posterior_samples, K, K_true=None, label="", all
     for k in slots:
         is_live = int(k) in live_set
         rows.append({"slot": int(k), "live": is_live, "quantity": "pvec",
-                     "rhat": float(az.rhat(pvec[:, :, k])),
+                     "rhat": float(az.rhat(analysis._split_chains(pvec[:, :, k]))),
                      "ess":  float(az.ess(pvec[:, :, k]))})
         for p in range(P):
             rows.append({"slot": int(k), "live": is_live, "quantity": f"mu[{p}]",
-                         "rhat": float(az.rhat(mu[:, :, k, p])),
+                         "rhat": float(az.rhat(analysis._split_chains(mu[:, :, k, p]))),
                          "ess":  float(az.ess(mu[:, :, k, p]))})
     df = pd.DataFrame(rows)
     if label:

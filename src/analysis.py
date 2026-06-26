@@ -659,6 +659,20 @@ def _sigma_from_latent(latent):                      # (C,S,K,n_latent) -> (C,S,
     return np.linalg.inv(prec)
 
 
+def _split_chains(a):
+    """Make a (C, S, ...) series usable by az.rhat for a SINGLE-chain run: split that one
+    chain into two halves so a within-chain split-R-hat is computed (arviz refuses a 1-chain
+    input and returns NaN). Multi-chain arrays pass through unchanged. This matches the
+    half-split marginal_comparison already applies for c1 runs, so the ECR gate
+    (classify_outcome) is defined for the c1 family too — a within-chain check only, it
+    cannot detect multimodality a lone chain never explored (that needs the c2 runs)."""
+    a = np.asarray(a)
+    if a.ndim < 2 or a.shape[0] != 1 or a.shape[1] < 4:
+        return a
+    h = a.shape[1] // 2
+    return np.concatenate([a[:, :h], a[:, h:2 * h]], axis=0)
+
+
 def invariant_convergence_summary(posterior_samples, include_cov=True):
     """
     R-hat and ESS for LABEL-INVARIANT functionals — the honest convergence check
@@ -673,12 +687,12 @@ def invariant_convergence_summary(posterior_samples, include_cov=True):
     mix_mean = np.einsum("csk,cskp->csp", pvec, mu)  # E[u] = Σ_k p_k μ_k
     for p in range(P):
         a = mix_mean[:, :, p]
-        rows.append({"quantity": f"E[u]_{p}", "rhat": float(az.rhat(a)), "ess": float(az.ess(a))})
+        rows.append({"quantity": f"E[u]_{p}", "rhat": float(az.rhat(_split_chains(a))), "ess": float(az.ess(a))})
 
     pvec_sorted = np.sort(pvec, axis=-1)
     for k in range(K):
         a = pvec_sorted[:, :, k]
-        rows.append({"quantity": f"pvec_sorted_{k}", "rhat": float(az.rhat(a)), "ess": float(az.ess(a))})
+        rows.append({"quantity": f"pvec_sorted_{k}", "rhat": float(az.rhat(_split_chains(a))), "ess": float(az.ess(a))})
 
     if include_cov:
         Sigma = _sigma_from_latent(np.asarray(posterior_samples["sigma_inv_chol_k_latent"]))
@@ -686,7 +700,7 @@ def invariant_convergence_summary(posterior_samples, include_cov=True):
         second = np.einsum("csk,cskpq->cspq", pvec, Sigma + outer)
         mbar   = np.einsum("csp,csq->cspq", mix_mean, mix_mean)
         tr     = np.einsum("cspp->cs", second - mbar)
-        rows.append({"quantity": "tr(Cov[u])", "rhat": float(az.rhat(tr)), "ess": float(az.ess(tr))})
+        rows.append({"quantity": "tr(Cov[u])", "rhat": float(az.rhat(_split_chains(tr))), "ess": float(az.ess(tr))})
 
     return pd.DataFrame(rows).set_index("quantity")
 

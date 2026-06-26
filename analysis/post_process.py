@@ -220,6 +220,52 @@ def diagnostics_rows(diag_pkl, cond, max_treedepth=10):
     return rows
 
 
+def _contingency(true_lab, pred_lab):
+    ct = pd.factorize(true_lab)[0]
+    cp = pd.factorize(pred_lab)[0]
+    cont = np.zeros((ct.max() + 1, cp.max() + 1), dtype=np.int64)
+    np.add.at(cont, (ct, cp), 1)
+    return cont
+
+
+def _adjusted_rand(true_lab, pred_lab):
+    """Adjusted Rand index (label-permutation invariant) — no scikit-learn dependency."""
+    from scipy.special import comb
+    cont = _contingency(true_lab, pred_lab)
+    n = int(true_lab.size)
+    sum_c = comb(cont, 2).sum()
+    sum_a = comb(cont.sum(axis=1), 2).sum()
+    sum_b = comb(cont.sum(axis=0), 2).sum()
+    expected = sum_a * sum_b / comb(n, 2)
+    maxi = 0.5 * (sum_a + sum_b)
+    return float(1.0 if maxi == expected else (sum_c - expected) / (maxi - expected))
+
+
+def allocation_accuracy(post, report, truth, K, Z):
+    """Partition recovery: reconstruct hard allocations z (Rossi 5.5.19), relabel them with
+    the ECR permutations so labels are consistent across draws, take each unit's modal
+    component, and score against TRUE_INDICATORS — Hungarian-matched accuracy + adjusted Rand."""
+    tind = truth.get("TRUE_INDICATORS")
+    if tind is None:
+        return {"alloc_accuracy": np.nan, "adjusted_rand": np.nan}
+    tind = np.asarray(tind).ravel()
+    try:
+        z, _ = ls.reconstruct_allocations(post, Z=Z)            # (C,S,N) raw labels
+    except Exception:
+        return {"alloc_accuracy": np.nan, "adjusted_rand": np.nan}
+    C, S, N = z.shape
+    z_flat = z.reshape(C * S, N).astype(np.int64)
+    perm = report.get("permutations")
+    if perm is not None and np.asarray(perm).shape[-1] == K:
+        inv = np.argsort(np.asarray(perm), axis=2).reshape(C * S, K)   # raw label -> ECR slot
+        z_flat = np.take_along_axis(inv, z_flat, axis=1)
+    modal = np.array([np.bincount(z_flat[:, i], minlength=K).argmax() for i in range(N)])
+    cont = _contingency(tind, modal)
+    row, col = linear_sum_assignment(-cont)
+    return {"alloc_accuracy": float(cont[row, col].sum() / N),
+            "adjusted_rand": _adjusted_rand(tind, modal)}
+
+
 def per_run(pkl, meta_f, acc):
     meta = json.load(open(meta_f))
     cond = {k: meta[k] for k in COND_KEYS}
@@ -242,11 +288,12 @@ def per_run(pkl, meta_f, acc):
     relabeled, report = ls.relabel_run(post, K=K, Z=Z, K_true=K_true)
     gate = analysis.invariant_convergence_summary(post, include_cov=True)
     verdict = ls.classify_outcome(report, gate)
+    alloc = allocation_accuracy(post, report, truth, K, Z)
     acc["ecr_report"].append({**cond, "converged": report["converged"], "n_iter": report["n_iter"],
                               "switching_rate": report["switching_rate"], "verdict": verdict["verdict"],
                               "gate_passed": verdict["gate_passed"],
                               "invariant_pvec_sorted_rhat": verdict["invariant_pvec_sorted_rhat"],
-                              "invariant_Eu_rhat": verdict["invariant_Eu_rhat"]})
+                              "invariant_Eu_rhat": verdict["invariant_Eu_rhat"], **alloc})
 
     # ---- ECR-relabeled component weights (slots ordered by descending weight) ----
     pvec_re = np.asarray(relabeled["pvec"]).reshape(-1, K)
