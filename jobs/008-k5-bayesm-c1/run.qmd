@@ -172,6 +172,7 @@ the result is written to `RAW_DIR` as `.bin` draws + `dims.json` + `meta_r.json`
 
 ```{r}
 #| label: bayesm-fit
+library(reticulate)   # attaches the `py` object so R can read the Python session's vars
 source(file.path(py$SRC_DIR_STR, "bayesm_sampler.R"))
 run_bayesm_fit(
   data_path   = py$data_path,
