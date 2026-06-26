@@ -226,6 +226,64 @@ with open(DIR_POST / f"{RUN_KEY}.pkl", "wb") as f:
 print("saved posterior_raw:", {k: tuple(v.shape) for k, v in post_np.items()})
 ```
 
+## Save sampler diagnostics
+
+Per-kernel transition diagnostics are **already computed by Goose**, just never
+extracted. NUTS records `divergent`, `treedepth`, `leapfrog`, `acceptance_prob`,
+`turning`; HMC records `divergent`, `acceptance_prob`, `position_moved`. Arrays are
+`(chains, draws)`. This is the mechanistic evidence for NUTS trajectory blow-up on
+overspecified mixtures — `treedepth` saturating at `max_treedepth` (→ `leapfrog`
+explosion) versus HMC's fixed `num_integration_steps`. Pure post-hoc extraction from
+`mcmc_results`; the sampling itself is unchanged.
+
+```{python}
+# | label: save-diagnostics
+import dataclasses
+
+def _extract_diagnostics(results):
+    try:
+        tis = results.get_posterior_transition_infos()   # {kernel_id: TransitionInfo}
+    except Exception as e:
+        logger.warning(f"transition infos unavailable: {e}")
+        return {}, {}
+    out = {}
+    for kid, info in tis.items():
+        out[kid] = {f.name: np.asarray(getattr(info, f.name))
+                    for f in dataclasses.fields(info)}
+    try:
+        kbp = dict(results.get_kernels_by_pos_key())     # {pos_key: kernel_id}
+    except Exception:
+        kbp = {}
+    return out, kbp
+
+diag, kernels_by_pos_key = _extract_diagnostics(mcmc_results)
+DIR_DIAG = DIR_OUT / "diagnostics"
+DIR_DIAG.mkdir(parents=True, exist_ok=True)
+with open(DIR_DIAG / f"{RUN_KEY}.pkl", "wb") as f:
+    pickle.dump(
+        {"sampler": sampler, "run_key": RUN_KEY,
+         "kernels_by_pos_key": kernels_by_pos_key,  # {pos_key: kernel_id}
+         "transition_infos": diag}, f)              # {kernel_id: {field: (chains, draws)}}
+
+def _diag_rollup(diag):
+    n_div, max_td, max_lp, accs = 0, None, None, []
+    for fl in diag.values():
+        if "divergent" in fl:
+            n_div += int(np.sum(fl["divergent"]))
+        if "treedepth" in fl:
+            t = int(np.max(fl["treedepth"])); max_td = t if max_td is None else max(max_td, t)
+        if "leapfrog" in fl:
+            l = int(np.max(fl["leapfrog"])); max_lp = l if max_lp is None else max(max_lp, l)
+        if "acceptance_prob" in fl:
+            accs.append(float(np.mean(fl["acceptance_prob"])))
+    mean_acc = round(float(np.mean(accs)), 4) if accs else None
+    return n_div, max_td, max_lp, mean_acc
+
+n_divergent, max_treedepth, max_leapfrog, mean_acceptance = _diag_rollup(diag)
+print("diagnostics:", {"n_divergent": n_divergent, "max_treedepth": max_treedepth,
+                       "max_leapfrog": max_leapfrog, "mean_acceptance": mean_acceptance})
+```
+
 ```{python}
 # | label: save-meta
 def _count_sampling_errors(log_text):
@@ -259,6 +317,8 @@ meta = {
     "runtime_s": round(runtime_s, 2),
     "n_sampling_errors": _count_sampling_errors(sampling_log_text),
     "invariant_rhat_max": rhat_max, "invariant_ess_min": ess_min,
+    "n_divergent": n_divergent, "max_treedepth": max_treedepth,
+    "max_leapfrog": max_leapfrog, "mean_acceptance": mean_acceptance,
     "posterior_shapes": {k: list(v.shape) for k, v in post_np.items()},
     "finished_at": datetime.now().isoformat(timespec="seconds"),
 }
