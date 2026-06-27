@@ -178,9 +178,14 @@ run_bayesm_fit <- function(data_path, out_raw_dir, k_model, chains, r_total,
         write_bin(beta_arr, file.path(OUT_RAW_DIR, sprintf("beta_chain%d.bin", cidx)))
 
         if (has_Z) {
-            # Deltadraw row = vec(Delta) column-major of (D,P); reshape to (S,D,P)
+            # bayesm's Deltadraw row is vec(Delta) for Delta indexed (nvar, nz) = (P, D)
+            # — column-major of (P, D), i.e. ROW-major of the (D, P) we want. Reshape to
+            # (P, D, S) then permute to canonical (S, D, P) so delta[s, d, p] = effect of
+            # demographic d on parameter p (matches TRUE_DELTA and the Liesel Delta).
+            # (Reshaping as (D, P) transposes the demographic x parameter mapping when
+            # D != P — verified against regress(bayesm beta ~ Z), which matches TRUE_DELTA.)
             Dd <- out$Deltadraw[keep_idx, , drop = FALSE]
-            delta_arr <- aperm(array(t(Dd), dim = c(D, P, S)), c(3, 1, 2))
+            delta_arr <- aperm(array(t(Dd), dim = c(P, D, S)), c(3, 2, 1))
             write_bin(delta_arr, file.path(OUT_RAW_DIR, sprintf("delta_chain%d.bin", cidx)))
         }
 

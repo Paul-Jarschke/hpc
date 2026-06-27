@@ -309,6 +309,126 @@ def generate_delta_summaries(delta_samples, param_names, demo_names, true_delta=
         display(df_diff)
 
 
+def delta_summary_rows(delta_draws, true_delta, demo_names, param_names,
+                       cond=None, ci=(2.5, 97.5)):
+    """Tidy, persistable per-element posterior summary of the demographic shift matrix Delta.
+
+    One row per Delta element ``(demo d, param p)`` carrying the posterior **mean** and
+    **std** (the "=== Posterior distribution of Delta (mean + std) ===" table) plus the
+    credible-interval bounds (default 95% CI) and the ground-truth ``TRUE_DELTA`` value,
+    so each model run's Delta estimates can be compared to truth without re-opening the
+    full posterior. This is the numeric, file-friendly form of
+    ``generate_delta_summaries`` / ``plot_delta_distributions`` and is the SINGLE source
+    of truth reused by ``analysis/post_process.delta_recovery_rows`` - so a run's saved
+    ``out/delta_summary/<run_key>.csv`` and the gathered ``delta_recovery.csv`` agree
+    element-for-element.
+
+    Parameters
+    ----------
+    delta_draws : array (chains, draws, D, P) or (draws, D, P), or None.
+        Posterior draws of the model's ``Delta`` pos_key. ``None`` / fewer than 2 dims /
+        ``D == 0`` -> ``[]`` (scenarios without demographic covariates).
+    true_delta : array (D, P) or None.
+        Ground-truth ``TRUE_DELTA``; ``None`` -> ``true_value``/``bias``/``in_ci`` NaN.
+    demo_names : length-D row labels (falls back to ``demo{d}``).
+    param_names : length-P column labels.
+    cond : dict, optional
+        Identifying columns (run id, condition keys) prepended to every row so the
+        per-run CSVs concatenate cleanly.
+    ci : (low, high) percentiles for the credible interval. Default ``(2.5, 97.5)`` = 95%.
+
+    Returns
+    -------
+    list[dict] : columns ``[*cond, demo, param, post_mean, post_std, ci_low, ci_high,
+                 true_value, bias, in_ci]``. ``bias = post_mean - true_value`` is the
+                 SIGNED deviation from truth (positive = overestimate), matching the
+                 convention in analysis/plot_recovery.py (``delta_bias_plot``) and
+                 ``beta_recovery_rows`` - so direction is preserved, not just magnitude.
+    """
+    if delta_draws is None:
+        return []
+    Delta = np.asarray(delta_draws)
+    if Delta.ndim < 2:
+        return []
+    D, P = Delta.shape[-2], Delta.shape[-1]
+    if D == 0:
+        return []
+    flat = Delta.reshape(-1, D, P)
+    lo_q, hi_q = ci
+    cond = dict(cond or {})
+    td = None if true_delta is None else np.asarray(true_delta, dtype=float)
+    if demo_names is None:
+        demo_names = [f"demo{d}" for d in range(D)]
+    rows = []
+    for dd in range(D):
+        for p in range(P):
+            draws = flat[:, dd, p]
+            lo, hi = np.percentile(draws, [lo_q, hi_q])
+            mean = float(draws.mean())
+            tv = float(td[dd, p]) if td is not None else float("nan")
+            rows.append({**cond, "demo": demo_names[dd], "param": param_names[p],
+                         "post_mean": mean, "post_std": float(draws.std()),
+                         "ci_low": float(lo), "ci_high": float(hi), "true_value": tv,
+                         "bias": ((mean - tv) if td is not None else float("nan")),
+                         "in_ci": (bool(lo <= tv <= hi) if td is not None else None)})
+    return rows
+
+
+def beta_summary_rows(beta_draws, true_beta, param_names, cond=None, ci=(2.5, 97.5)):
+    """Tidy, persistable per-element posterior summary of the unit-level coefficients beta_i.
+
+    One row per ``(unit i, param p)`` carrying the posterior **mean**, **std** and
+    credible-interval bounds (default 95% CI) of ``beta_i[p]``, plus the ground-truth
+    ``TRUE_BETA`` value and the signed ``bias``. Unlike the component means/covariances
+    (``mu_k`` / ``Sigma_k``), each unit's ``beta_i`` is INDIVIDUALLY IDENTIFIED and
+    UNAFFECTED by component label switching, so an element-wise posterior summary is
+    meaningful for every sampler (no ECR relabeling needed). With N units and P params
+    this is ``N * P`` rows per run (e.g. 300 * 4 = 1200).
+
+    Mirrors ``delta_summary_rows``'s schema/sign convention so the two per-run tables
+    (``out/delta_summary`` and ``out/beta_summary``) share columns.
+
+    Parameters
+    ----------
+    beta_draws : array (chains, draws, N, P) or (draws, N, P), or None.
+        Posterior draws of the model's ``beta_i`` pos_key. ``None`` / < 2 dims -> ``[]``.
+    true_beta : array (N, P) or None.
+        Ground-truth ``TRUE_BETA``; ``None`` -> ``true_value``/``bias``/``in_ci`` NaN.
+    param_names : length-P column labels.
+    cond : dict, optional. Identifying columns prepended to every row.
+    ci : (low, high) percentiles for the credible interval. Default 95% CI.
+
+    Returns
+    -------
+    list[dict] : columns ``[*cond, unit, param, post_mean, post_std, ci_low, ci_high,
+                 true_value, bias, in_ci]`` (``bias = post_mean - true_value``, signed).
+    """
+    if beta_draws is None:
+        return []
+    beta = np.asarray(beta_draws)
+    if beta.ndim < 2:
+        return []
+    N, P = beta.shape[-2], beta.shape[-1]
+    flat = beta.reshape(-1, N, P)
+    mean = flat.mean(axis=0)                              # (N,P)
+    std = flat.std(axis=0)                                # (N,P)
+    lo, hi = np.percentile(flat, list(ci), axis=0)        # (N,P) each
+    cond = dict(cond or {})
+    tb = None if true_beta is None else np.asarray(true_beta, dtype=float)
+    rows = []
+    for i in range(N):
+        for p in range(P):
+            m = float(mean[i, p])
+            tv = float(tb[i, p]) if tb is not None else float("nan")
+            rows.append({**cond, "unit": i, "param": param_names[p],
+                         "post_mean": m, "post_std": float(std[i, p]),
+                         "ci_low": float(lo[i, p]), "ci_high": float(hi[i, p]),
+                         "true_value": tv,
+                         "bias": ((m - tv) if tb is not None else float("nan")),
+                         "in_ci": (bool(lo[i, p] <= tv <= hi[i, p]) if tb is not None else None)})
+    return rows
+
+
 def plot_delta_distributions(delta_samples, param_names, demo_names, true_delta=None):
     n_demos, n_params = len(demo_names), len(param_names)
     fig, axes = plt.subplots(n_demos, n_params, figsize=(4 * n_params, 3.5 * n_demos))

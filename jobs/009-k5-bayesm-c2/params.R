@@ -2,7 +2,7 @@ library(tidyverse)
 
 # Number of replicate seeds per scenario to include (data_seed in 1..MAX_DATA_SEED).
 # Set to 50 for the full grid; 10 matches the current liesel subset (004-007).
-MAX_DATA_SEED <- 10
+MAX_DATA_SEED <- 50
 
 # ..............................................................................
 # Build params.csv for ONE n_chains slice of the bayesm arm of the k5model_mixture

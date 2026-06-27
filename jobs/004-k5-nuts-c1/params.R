@@ -2,7 +2,7 @@ library(tidyverse)
 
 # Number of replicate seeds per scenario to include (data_seed in 1..MAX_DATA_SEED).
 # Set to 50 for the full grid; a smaller value runs a quick subset.
-MAX_DATA_SEED <- 10
+MAX_DATA_SEED <- 50
 
 # ..............................................................................
 # Build params.csv for ONE (sampler x n_chains) slice of the k5model_mixture

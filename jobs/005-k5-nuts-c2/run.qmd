@@ -218,12 +218,24 @@ label-invariant convergence number for at-a-glance monitoring.
 # | label: save-posterior-raw
 RUN_KEY = f"{dataset_key}__k{k_model}_{sampler}_c{n_chains}"
 
+# Tier-2 subset: keep the FULL posterior only for the first few replicate seeds (needed for
+# the cross-sampler marginal-density comparison, which needs raw chains from all samplers
+# together). EVERY run still writes the tidy per-run summaries below; for the rest the
+# posterior is summarised on-node and discarded, so the study scales to many seeds without
+# shipping GBs. See src/summaries.py.
+POSTERIOR_SUBSET_MAX = 5
+data_seed = int(PARAMS.get("data_seed", -1))
+SAVE_POSTERIOR = JOB_TESTING or data_seed <= POSTERIOR_SUBSET_MAX
+
 post_np = {k: np.asarray(v) for k, v in posterior_samples.items()}
-DIR_POST = DIR_OUT / "posterior_raw"
-DIR_POST.mkdir(parents=True, exist_ok=True)
-with open(DIR_POST / f"{RUN_KEY}.pkl", "wb") as f:
-    pickle.dump(post_np, f)
-print("saved posterior_raw:", {k: tuple(v.shape) for k, v in post_np.items()})
+if SAVE_POSTERIOR:
+    DIR_POST = DIR_OUT / "posterior_raw"
+    DIR_POST.mkdir(parents=True, exist_ok=True)
+    with open(DIR_POST / f"{RUN_KEY}.pkl", "wb") as f:
+        pickle.dump(post_np, f)
+    print("saved posterior_raw:", {k: tuple(v.shape) for k, v in post_np.items()})
+else:
+    print(f"posterior_raw NOT saved (data_seed={data_seed} > {POSTERIOR_SUBSET_MAX}); on-node summaries only")
 ```
 
 ## Save sampler diagnostics
@@ -328,6 +340,44 @@ with open(DIR_META / f"{RUN_KEY}.json", "w") as f:
     json.dump(meta, f, indent=2)
 print("meta:", json.dumps({k: meta[k] for k in
       ("run_key", "runtime_s", "n_sampling_errors", "invariant_rhat_max", "invariant_ess_min")}))
+```
+
+## Save per-run summary tables (Tier 1)
+
+Every tidy table that can be computed from THIS run's posterior + ground truth is written
+here as `out/<table>/<run_key>.csv`: recovery of `Delta` / `beta` / `mu` / `Sigma` /
+weights, the ECR report, convergence, mixture moments and sampler diagnostics. The same
+`src/summaries.py` builds them on-node here AND post-hoc in `analysis/post_process.py`, so
+the per-run CSVs and any gathered table agree exactly. This is what lets the study scale to
+many seeds: the headline metrics ride along as KB-sized CSVs while only the Tier-2 subset
+keeps the full posterior. If summarising fails, the posterior is saved as a fallback so an
+expensive run is never lost.
+
+```{python}
+# | label: save-summaries
+from src import summaries as smry
+
+# Liesel runs carry per-kernel transition diagnostics (built above); pass them through.
+diag_payload = {"kernels_by_pos_key": kernels_by_pos_key, "transition_infos": diag}
+try:
+    summary_tables, _ = smry.per_run_tables(post_np, meta, raw, diag_payload)
+    for _name, _rows in summary_tables.items():
+        if not _rows:
+            continue
+        _dir = DIR_OUT / _name
+        _dir.mkdir(parents=True, exist_ok=True)
+        pd.DataFrame(_rows).to_csv(_dir / f"{RUN_KEY}.csv", index=False)
+    logger.info("per-run summaries: " + ", ".join(f"{k}={len(v)}" for k, v in summary_tables.items()))
+    print("saved summaries:", {k: len(v) for k, v in summary_tables.items()})
+except Exception as e:  # never lose a run to a summary bug: keep the posterior to re-derive
+    logger.error(f"on-node summaries failed: {e}")
+    if not SAVE_POSTERIOR:
+        DIR_POST = DIR_OUT / "posterior_raw"
+        DIR_POST.mkdir(parents=True, exist_ok=True)
+        with open(DIR_POST / f"{RUN_KEY}.pkl", "wb") as f:
+            pickle.dump(post_np, f)
+        logger.error("saved posterior_raw as fallback for post-hoc re-derivation")
+    print(f"WARNING: on-node summaries failed ({e}); see log")
 ```
 
 ## Mark job as finished
