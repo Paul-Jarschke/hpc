@@ -3,13 +3,17 @@ Batch data generator for the `k5model_mixture` experiment.
 
 Experiment design
 -----------------
-For each true number of mixture components K_TRUE in {1, 2, 3, 5}, draw 50 replicate
-datasets (seeds 1..50). Every dataset is later fit with an *overspecified* K_MODEL = 5
+For each true number of mixture components K_TRUE in {1, 2, 3, 5}, draw 100 replicate
+datasets (seeds 1..100). Every dataset is later fit with an *overspecified* K_MODEL = 5
 model (the fitting strategy lives in the job's params.csv, not here).
 
 Because `Z` and `Delta_true` are drawn before any K-dependent branching in the DGP and
-have identical shapes across scenarios, reusing seeds 1..50 across K_TRUE gives a *paired*
+have identical shapes across scenarios, reusing seeds 1..100 across K_TRUE gives a *paired*
 design: the demographic structure is held fixed across K_TRUE for a matched seed.
+
+The DGP is deterministic in `seed`, so re-running is idempotent: datasets that already
+exist on disk are kept byte-identical and skipped (only genuinely new seeds are written),
+while the manifest is always rewritten to cover every seed in SEEDS.
 
 Output (one self-describing JSON per dataset, ground truth included):
     data/in/k5model_mixture/kt{K_TRUE}_s{SEED:02d}.json
@@ -41,7 +45,7 @@ from dgp.experiment_configs import SCENARIOS  # noqa: E402
 # Experiment configuration
 # --------------------------------------------------------------------------------------
 EXPERIMENT = "k5model_mixture"
-SEEDS = range(1, 51)  # 1..50 inclusive
+SEEDS = range(1, 101)  # 1..100 inclusive
 
 # K_TRUE -> study scenario name (the vendored SCENARIOS dict is the single source of
 # truth for n_units/n_obs/n_alts/n_demos/custom_pvec).
@@ -84,12 +88,16 @@ def main(limit: int | None = None) -> None:
 
         print(f"[{i:3d}/{total}] {dataset_key}  (scenario={scenario}, K_true={k_true}, seed={seed})")
 
-        data = generate_mixture_simulated_data(**cfg)
-        # save_to_json prints a line per file; keep batch output quiet without editing
-        # the vendored code.
-        with contextlib.redirect_stdout(io.StringIO()):
-            save_to_json(data, fpath)
+        if os.path.exists(fpath):
+            print("        exists -> skipping generation (kept byte-identical)")
+        else:
+            data = generate_mixture_simulated_data(**cfg)
+            # save_to_json prints a line per file; keep batch output quiet without editing
+            # the vendored code.
+            with contextlib.redirect_stdout(io.StringIO()):
+                save_to_json(data, fpath)
 
+        # Always record in the manifest so it spans every seed in SEEDS, even skipped ones.
         manifest_rows.append({
             "dataset_key": dataset_key,
             "scenario":    scenario,
