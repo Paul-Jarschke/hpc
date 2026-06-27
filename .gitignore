@@ -12,6 +12,7 @@ data/in
 data/out
 .vscode
 .env
+*.png
 CLAUDE.md
 USAGE.md
 */*/hpc/sbatch.sh
