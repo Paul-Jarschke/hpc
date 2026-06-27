@@ -327,6 +327,90 @@ def delta_bias_across_seeds(sampler: str = "nuts", n_chains: int = 1, k_true: in
     )
 
 
+def delta_bias_samplers_by_element(n_chains: int = 2, k_true: int = 1,
+                                   df: Optional[pd.DataFrame] = None, *,
+                                   jitter: bool = False) -> ggplot:
+    """Per-element Delta bias with the SAMPLERS side by side, for one n_chains and one k_true.
+
+    Like delta_bias_across_seeds but instead of a single model, each Delta element on the
+    x-axis gets one dodged box per sampler (bayesm / nuts / hmc), colored by sampler, so you
+    compare them element by element. Each box pools that element's bias = post_mean -
+    true_value over all seeds. jitter is off by default (3 dodged boxes + raw points get busy).
+    """
+    df = load_recovery("delta") if df is None else df
+    df = df.copy()
+    df["element"] = df["demo"].astype(str) + " : " + df["param"].astype(str)
+    filters = {"n_chains": n_chains, "k_true": k_true}
+    sub = _apply_filters(df, filters)
+    if sub.empty:
+        raise ValueError(f"No delta_recovery rows for n_chains={n_chains}, k_true={k_true}.")
+    order = sub.sort_values(["demo", "param"])["element"].drop_duplicates().tolist()
+    counts = sub.groupby("sampler")["data_seed"].nunique().to_dict()
+    print(f"[delta_bias_samplers_by_element] n_chains={n_chains} k_true={k_true}: "
+          f"seeds/sampler={counts}")
+    return recovery_boxplot(
+        df, value="bias", x="element", color="sampler", filters=filters, x_order=order,
+        hline=0.0, jitter=jitter,
+        title=f"Δ bias per element, by sampler - k_true={k_true} (n_chains={n_chains})",
+        xlab="Δ element  (demographic : parameter)",
+        ylab="Bias  (post_mean - true_value)", figure_size=(12.0, 5.5),
+    )
+
+
+def runtime_samplers_by_ktrue(n_chains: int = 2, df: Optional[pd.DataFrame] = None, *,
+                              logy: bool = True, jitter: bool = False) -> ggplot:
+    """Runtime by true-component count, with the SAMPLERS side by side (same layout as
+    delta_bias_samplers_by_element). x-axis = k_true (1/2/3/5); one dodged box per sampler,
+    pooling the per-fit sampling time over all seeds. Log y by default, since NUTS runtime
+    blows up on overspecified mixtures (k_true < k_model) while HMC/bayesm stay flat - the
+    headline cost finding. Source: runs.csv (runtime_s = the timed sampler call)."""
+    df = load_recovery("runs") if df is None else df
+    df = df.copy()
+    filters = {"n_chains": n_chains}
+    sub = _apply_filters(df, filters)
+    if sub.empty:
+        raise ValueError(f"No runs for n_chains={n_chains}.")
+    print(f"[runtime_samplers_by_ktrue] n_chains={n_chains}: runs/sampler="
+          f"{sub.groupby('sampler')['runtime_s'].count().to_dict()}")
+    return recovery_boxplot(
+        df, value="runtime_s", x="k_true", color="sampler", filters=filters,
+        x_order=[1, 2, 3, 5], hline=None, jitter=jitter, logy=logy,
+        title=f"Runtime by true-component count, by sampler (n_chains={n_chains})",
+        xlab="k_true  (true number of mixture components)",
+        ylab="Runtime (s, log scale)" if logy else "Runtime (s)", figure_size=(9.0, 5.5),
+    )
+
+
+def runtime_by_ktrue(sampler: str = "nuts", n_chains: int = 2,
+                     df: Optional[pd.DataFrame] = None, *,
+                     unit: Optional[str] = None, jitter: bool = True) -> ggplot:
+    """Runtime by k_true for ONE sampler, on its own LINEAR y-scale - so each sampler's
+    variation across true-component counts is readable without NUTS's magnitude flattening the
+    others. x-axis = k_true (1/2/3/5), one box per scenario, points = per-seed sampling time.
+
+    unit: 'h' (hours) or 'min' (minutes); default = hours for nuts, minutes for hmc/bayesm.
+    """
+    df = load_recovery("runs") if df is None else df
+    df = df.copy()
+    if unit is None:
+        unit = "h" if sampler == "nuts" else "min"
+    divisor, ulab = (3600.0, "hours") if unit == "h" else (60.0, "minutes")
+    df["runtime"] = df["runtime_s"] / divisor
+    filters = {"sampler": sampler, "n_chains": n_chains}
+    sub = _apply_filters(df, filters)
+    if sub.empty:
+        raise ValueError(f"No runs for sampler={sampler}, n_chains={n_chains}.")
+    print(f"[runtime_by_ktrue] {sampler} c{n_chains} [{ulab}]: runs/k_true="
+          f"{sub.groupby('k_true')['runtime_s'].count().to_dict()}")
+    return recovery_boxplot(
+        df, value="runtime", x="k_true", filters=filters, x_order=[1, 2, 3, 5],
+        hline=None, jitter=jitter, logy=False,
+        title=f"Runtime by true-component count - {SAMPLER_LABELS.get(sampler, sampler)} (n_chains={n_chains})",
+        xlab="k_true  (true number of mixture components)",
+        ylab=f"Runtime ({ulab})", figure_size=(7.5, 4.8),
+    )
+
+
 def runtime_plot(df: Optional[pd.DataFrame] = None, *, logy: bool = True,
                  jitter: bool = True, paired: bool = True) -> ggplot:
     """Wall-clock runtime per fit, by sampler, one panel per true-component count k_true
