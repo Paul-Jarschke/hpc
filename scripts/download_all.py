@@ -61,11 +61,15 @@ def download_job(job_dir: Path, alias: str, project_dir: str, with_posteriors: b
     # `-C <parent> out` keeps the archive rooted at "out/" so it extracts to jobs/<name>/out.
     with open(archive, "wb") as fh:
         result = run(["ssh", alias, f"tar -czf - -C '{remote_parent}' {exclude}out"], stdout=fh)
-    if result.returncode != 0:
+    # tar exit 1 = "file changed as we read it": the job is still writing out/, so a file changed
+    # mid-read. The archive is a valid snapshot, so accept it. exit >= 2 (or ssh failure 255) is real.
+    if result.returncode > 1:
         archive.unlink(missing_ok=True)
         print(f"  FAILED: ssh/tar exit {result.returncode} "
-              f"(is out/ present on the cluster for this job?)")
+              f"(out/ missing on the cluster, or the SSH auth failed - retry)")
         return False
+    if result.returncode == 1:
+        print("  note: tar exit 1 (a file changed mid-read - job still running); snapshot is fine")
 
     try:
         with tarfile.open(archive) as tar:
