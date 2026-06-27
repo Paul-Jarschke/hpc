@@ -44,16 +44,23 @@ def load_dotenv(path: Path) -> None:
             os.environ[key] = value
 
 
-def download_job(job_dir: Path, alias: str, project_dir: str) -> bool:
-    """Stream <project_dir>/jobs/<name>/out from the HPC and extract into jobs/<name>/out."""
+def download_job(job_dir: Path, alias: str, project_dir: str, with_posteriors: bool = False) -> bool:
+    """Stream <project_dir>/jobs/<name>/out from the HPC and extract into jobs/<name>/out.
+
+    By default the heavy out/posterior_raw is EXCLUDED - the per-run summary CSVs are all you
+    need for the recovery analysis (Tier 1), so the download is KB-to-MB scale. Pass
+    with_posteriors=True to also pull the Tier-2 subset posteriors (data_seed<=5, for the
+    cross-sampler marginal comparison)."""
     remote_parent = f"{project_dir}/jobs/{job_dir.name}"   # home-relative POSIX path on the HPC
     archive = job_dir / "output.tar.gz"
-    print(f"\n=== {job_dir.name}: streaming {remote_parent}/out from {alias} ===")
+    exclude = "" if with_posteriors else "--exclude='out/posterior_raw' "
+    what = "out (incl. posteriors)" if with_posteriors else "out summaries (no posterior_raw)"
+    print(f"\n=== {job_dir.name}: streaming {remote_parent}/{what} from {alias} ===")
 
     # One ssh connection: tar+gzip the remote out/ to stdout, captured into a local file.
     # `-C <parent> out` keeps the archive rooted at "out/" so it extracts to jobs/<name>/out.
     with open(archive, "wb") as fh:
-        result = run(["ssh", alias, f"tar -czf - -C '{remote_parent}' out"], stdout=fh)
+        result = run(["ssh", alias, f"tar -czf - -C '{remote_parent}' {exclude}out"], stdout=fh)
     if result.returncode != 0:
         archive.unlink(missing_ok=True)
         print(f"  FAILED: ssh/tar exit {result.returncode} "
@@ -90,15 +97,18 @@ if __name__ == "__main__":
     if not jobs_root.is_dir():
         sys.exit(f"No '{JOBS_DIRECTORY}/' directory under {wd}. Run from the repo root.")
 
-    filters = sys.argv[1:]
+    args = sys.argv[1:]
+    with_posteriors = "--with-posteriors" in args
+    filters = [a for a in args if not a.startswith("-")]
     jobs = sorted(p for p in jobs_root.iterdir() if p.is_dir())
     if filters:
         jobs = [j for j in jobs if any(f in j.name for f in filters)]
     if not jobs:
         sys.exit(f"No jobs matched {filters or 'jobs/'}.")
 
-    print(f"Downloading {len(jobs)} job(s) from {alias} (remote root: {project_dir})")
-    failures = [j.name for j in jobs if not download_job(j, alias, project_dir)]
+    print(f"Downloading {len(jobs)} job(s) from {alias} (remote root: {project_dir})"
+          + ("" if with_posteriors else "  [summaries only - excluding posterior_raw]"))
+    failures = [j.name for j in jobs if not download_job(j, alias, project_dir, with_posteriors)]
 
     if failures:
         sys.exit(f"\nDownload failed for: {', '.join(failures)}")
