@@ -27,6 +27,9 @@ from pathlib import Path
 from typing import Optional, Sequence, Union
 
 import matplotlib
+import matplotlib.figure
+import matplotlib.pyplot as plt
+import numpy as np
 
 matplotlib.use("Agg")  # non-interactive: save figures without a display/Tk (HPC + headless Windows)
 
@@ -41,6 +44,9 @@ from plotnine import (
     geom_jitter,
     ggplot,
     labs,
+    scale_color_manual,
+    scale_fill_manual,
+    scale_x_discrete,
     scale_y_log10,
     theme,
     theme_bw,
@@ -51,11 +57,31 @@ from plotnine import (
 # ----------------------------------------------------------------------------- #
 REPO = Path(__file__).resolve().parent.parent
 DIR_RECOVERY = REPO / "data" / "out" / "k5model_mixture"
-DIR_FIG = REPO / "analysis" / "out"
+DIR_FIG = REPO / "analysis" / "out" / "k5_results"
 
-# Fixed sampler order/labels so EVERY figure in the study is consistent.
+# Fixed sampler order/labels/colors so EVERY figure in the study is consistent.
+# bayesm = red; nuts/hmc = two shades of blue (matching the marginal-density reference plot).
 SAMPLER_ORDER = ["bayesm", "nuts", "hmc"]
 SAMPLER_LABELS = {"bayesm": "bayesm", "nuts": "NUTS", "hmc": "HMC"}
+SAMPLER_COLORS = {"nuts": "#08519c", "hmc": "#4292c6", "iwls": "#9ecae1", "bayesm": "#d62728"}
+TRUE_COLOR = "#000000"
+
+# Delta element label helpers (single source of truth for Δ_{d,p} (demo:param) notation).
+_DEMO_ORDER = ["z1", "z2"]
+_PARAM_ORDER = ["Alt1", "Alt2", "Alt3", "Price"]
+_SUBSCRIPTS = str.maketrans("0123456789", "₀₁₂₃₄₅₆₇₈₉")
+
+
+def delta_element_label(demo: str, param: str) -> str:
+    """Return 'Δ₁,₁ (z1:Alt1)' style label for one Delta matrix element.
+
+    Indices are 1-based row (demo) and column (param) positions in the D x P matrix.
+    Falls back to '?' for names not in the known orders so new datasets don't crash.
+    """
+    d = (_DEMO_ORDER.index(demo) + 1) if demo in _DEMO_ORDER else "?"
+    p = (_PARAM_ORDER.index(param) + 1) if param in _PARAM_ORDER else "?"
+    return f"Δ{str(d).translate(_SUBSCRIPTS)},{str(p).translate(_SUBSCRIPTS)} ({demo}:{param})"
+
 
 # Human-readable axis labels for the value columns we commonly plot.
 VALUE_LABELS = {
@@ -213,6 +239,9 @@ def recovery_boxplot(
     if color is not None:
         data[color] = data[color].astype(str)
         mapping = aes(x=x, y=value, fill=color)
+    elif x == "sampler":
+        # Fill boxes by sampler when sampler is on the x-axis (no explicit color grouping).
+        mapping = aes(x=x, y=value, fill=x)
 
     p = ggplot(data, mapping)
     if hline is not None:
@@ -222,6 +251,17 @@ def recovery_boxplot(
         p = p + geom_jitter(width=0.18, height=0.0, size=0.8, alpha=0.5, color="#444444")
     if logy:  # runtime / ESS etc. span orders of magnitude
         p = p + scale_y_log10()
+
+    # Apply the study-wide sampler color palette whenever sampler drives fill.
+    if x == "sampler" or color == "sampler":
+        s_order = (
+            x_order  # already resolved above for x == "sampler"
+            if x == "sampler"
+            else [s for s in SAMPLER_ORDER if s in set(data["sampler"])]
+        )
+        s_vals = [SAMPLER_COLORS.get(str(s), "#888888") for s in s_order]
+        s_labs = [SAMPLER_LABELS.get(str(s), str(s)) for s in s_order]
+        p = p + scale_fill_manual(values=s_vals, breaks=list(s_order), labels=s_labs)
 
     # Faceting: grid takes priority if either dim given, else optional wrap.
     if facet_row is not None or facet_col is not None:
@@ -240,8 +280,6 @@ def recovery_boxplot(
         # Relabel x ticks via the categorical's display labels.
         cats = list(data[x].cat.categories) if hasattr(data[x], "cat") else x_order
         if cats is not None:
-            from plotnine import scale_x_discrete
-
             p = p + scale_x_discrete(labels=[x_labels.get(c, c) for c in cats])
 
     p = p + theme_bw() + theme(
@@ -252,109 +290,179 @@ def recovery_boxplot(
     return p
 
 
-def save(plot: ggplot, filename: str, dir_fig: Path = DIR_FIG, dpi: int = 150) -> Path:
-    """Save a plot to analysis/out/ (created if missing). Returns the path."""
-    dir_fig.mkdir(parents=True, exist_ok=True)
+def save(plot, filename: str, dir_fig: Path = DIR_FIG, dpi: int = 150) -> Path:
+    """Save a ggplot or matplotlib Figure under dir_fig (created if missing). Returns the path."""
     out = dir_fig / filename
-    plot.save(out, dpi=dpi, verbose=False)
+    out.parent.mkdir(parents=True, exist_ok=True)
+    if isinstance(plot, matplotlib.figure.Figure):
+        plot.savefig(str(out), dpi=dpi, bbox_inches="tight")
+        plt.close(plot)
+    else:
+        plot.save(out, dpi=dpi, verbose=False)
     return out
 
 
-# ----------------------------------------------------------------------------- #
-# The two figures the user asked for, each a single call to the core.
-# ----------------------------------------------------------------------------- #
-def delta_bias_plot(df: Optional[pd.DataFrame] = None, *, jitter: bool = True,
-                    paired: bool = True) -> ggplot:
-    """(a) BIAS of the Z-covariate (Delta) estimates, n_chains==1, by sampler, with ONE
-    panel per true-component count k_true (1/2/3/5). Dashed line at 0 = unbiased; each box
-    pools the D*P=8 Delta elements over that k_true's datasets (paired across samplers)."""
-    df = load_recovery("delta") if df is None else df
-    d = _maybe_paired(_apply_filters(df, {"n_chains": 1}), paired, "delta_bias")
-    _print_box_counts(d)
-    return recovery_boxplot(
-        d, value="bias", x="sampler", facet_wrap_by="k_true", facet_scales="fixed",
-        hline=0.0, jitter=jitter,
-        title="Δ (Z-covariate) bias by sampler, per true-component count  (n_chains = 1)",
-        ylab="Bias  (post_mean − true_value)", xlab="Sampler", figure_size=(8.5, 6.0),
-    )
+def delta_bias_faceted_by_element(n_chains: int = 2, k_true: int = 1,
+                                   df=None, *, jitter: bool = True) -> ggplot:
+    """Delta bias with one panel per Δ element in a 4x2 grid, free y-scale per panel.
 
-
-def delta_sd_plot(df: Optional[pd.DataFrame] = None, *, jitter: bool = True,
-                  paired: bool = True) -> ggplot:
-    """(b) Posterior SD (post_std) of the Z-covariate (Delta) estimates, n_chains==1, by
-    sampler, one panel per true-component count k_true (1/2/3/5)."""
-    df = load_recovery("delta") if df is None else df
-    d = _maybe_paired(_apply_filters(df, {"n_chains": 1}), paired, "delta_sd")
-    _print_box_counts(d)
-    return recovery_boxplot(
-        d, value="post_std", x="sampler", facet_wrap_by="k_true", facet_scales="fixed",
-        jitter=jitter,
-        title="Δ (Z-covariate) posterior SD by sampler, per true-component count  (n_chains = 1)",
-        ylab="Posterior SD  (post_std)", xlab="Sampler", figure_size=(8.5, 6.0),
-    )
-
-
-def delta_bias_across_seeds(sampler: str = "nuts", n_chains: int = 1, k_true: int = 1,
-                            df: Optional[pd.DataFrame] = None, *, jitter: bool = True) -> ggplot:
-    """Boxplot of Delta bias per element ACROSS SEEDS for ONE model and one k_true.
-
-    Filters delta_recovery.csv to a single (sampler, n_chains, k_true) - e.g. NUTS, 1 chain,
-    1 true component - and draws one box per Delta element (demographic : parameter). Each
-    box pools that element's bias = post_mean - true_value over every replicate dataset
-    (data_seed), so it is the sampling distribution of the bias for that element across
-    datasets. Dashed line at 0 = unbiased. Needs the real multi-seed runs gathered by
-    post_process; with only one seed present each "box" is a single point.
+    Each element gets its own y-axis so outliers in one element do not compress others.
+    Boxplots are transparent (outline only); jittered points are colored by sampler.
+    One combined sampler legend on the right.
     """
     df = load_recovery("delta") if df is None else df
     df = df.copy()
-    df["element"] = df["demo"].astype(str) + " : " + df["param"].astype(str)
-    filters = {"sampler": sampler, "n_chains": n_chains, "k_true": k_true}
-    sub = _apply_filters(df, filters)
-    if sub.empty:
-        raise ValueError(f"No delta_recovery rows for sampler={sampler}, n_chains={n_chains}, "
-                         f"k_true={k_true}. Have the runs been downloaded + gathered?")
-    n_seeds = sub["data_seed"].nunique()
-    order = sub.sort_values(["demo", "param"])["element"].drop_duplicates().tolist()
-    print(f"[delta_bias_across_seeds] {sampler} c{n_chains} k_true={k_true}: "
-          f"{n_seeds} seed(s), {len(sub)} element-rows ({len(order)} elements)")
-    return recovery_boxplot(
-        df, value="bias", x="element", filters=filters, x_order=order,
-        hline=0.0, jitter=jitter,
-        title=f"Δ bias across {n_seeds} seed(s) - {SAMPLER_LABELS.get(sampler, sampler)}, "
-              f"k_true={k_true} (n_chains={n_chains})",
-        xlab="Δ element  (demographic : parameter)",
-        ylab="Bias  (post_mean - true_value)", figure_size=(9.0, 5.0),
-    )
-
-
-def delta_bias_samplers_by_element(n_chains: int = 2, k_true: int = 1,
-                                   df: Optional[pd.DataFrame] = None, *,
-                                   jitter: bool = False) -> ggplot:
-    """Per-element Delta bias with the SAMPLERS side by side, for one n_chains and one k_true.
-
-    Like delta_bias_across_seeds but instead of a single model, each Delta element on the
-    x-axis gets one dodged box per sampler (bayesm / nuts / hmc), colored by sampler, so you
-    compare them element by element. Each box pools that element's bias = post_mean -
-    true_value over all seeds. jitter is off by default (3 dodged boxes + raw points get busy).
-    """
-    df = load_recovery("delta") if df is None else df
-    df = df.copy()
-    df["element"] = df["demo"].astype(str) + " : " + df["param"].astype(str)
+    df["element"] = df.apply(lambda r: delta_element_label(r["demo"], r["param"]), axis=1)
     filters = {"n_chains": n_chains, "k_true": k_true}
-    sub = _apply_filters(df, filters)
+    sub = _apply_filters(df, filters).copy()
     if sub.empty:
         raise ValueError(f"No delta_recovery rows for n_chains={n_chains}, k_true={k_true}.")
-    order = sub.sort_values(["demo", "param"])["element"].drop_duplicates().tolist()
-    counts = sub.groupby("sampler")["data_seed"].nunique().to_dict()
-    print(f"[delta_bias_samplers_by_element] n_chains={n_chains} k_true={k_true}: "
-          f"seeds/sampler={counts}")
-    return recovery_boxplot(
-        df, value="bias", x="element", color="sampler", filters=filters, x_order=order,
-        hline=0.0, jitter=jitter,
-        title=f"Δ bias per element, by sampler - k_true={k_true} (n_chains={n_chains})",
-        xlab="Δ element  (demographic : parameter)",
-        ylab="Bias  (post_mean - true_value)", figure_size=(12.0, 5.5),
+
+    sampler_order = [s for s in SAMPLER_ORDER if s in set(sub["sampler"])]
+    sub["sampler"] = pd.Categorical(sub["sampler"], categories=sampler_order, ordered=True)
+    element_order = (
+        sub.sort_values(["demo", "param"])["element"].drop_duplicates().tolist()
     )
+    sub["element"] = pd.Categorical(sub["element"], categories=element_order, ordered=True)
+
+    counts = sub.groupby("sampler")["data_seed"].nunique().to_dict()
+    print(f"[delta_bias_faceted_by_element] n_chains={n_chains} k_true={k_true}: "
+          f"seeds/sampler={counts}")
+
+    color_vals = [SAMPLER_COLORS[s] for s in sampler_order]
+    n_comp = f"{k_true} True Component" + ("s" if k_true != 1 else "")
+
+    # Draw jitter first (behind box outline), then transparent box on top so both are visible.
+    p = (
+        ggplot(sub, aes(x="sampler", y="bias", color="sampler"))
+        + geom_hline(yintercept=0, linetype="dashed", color="#aaaaaa")
+        + geom_jitter(width=0.2, height=0, size=0.8, alpha=0.45)
+        + geom_boxplot(fill="#FFFFFF00", outlier_alpha=0)
+        + facet_wrap("element", ncol=4, scales="free_y", labeller="label_value")
+        + scale_color_manual(values=color_vals, labels=[SAMPLER_LABELS.get(s, s) for s in sampler_order])
+        + scale_x_discrete(labels=[SAMPLER_LABELS.get(s, s) for s in sampler_order])
+        + labs(
+            x="Sampler",
+            y="Empirical Bias",
+            color="Sampler",
+            title=f"Empirical Bias of Δ - {n_comp}",
+        )
+        + theme_bw()
+        + theme(
+            figure_size=(14, 7),
+            axis_text_x=element_text(size=8),
+            plot_title=element_text(size=11),
+        )
+    )
+    return p
+
+
+def delta_sd_faceted_by_element(n_chains: int = 2, k_true: int = 1,
+                                df=None, *, jitter: bool = True) -> ggplot:
+    """Posterior SD of Delta with one panel per element in a 4x2 grid, free y-scale per panel.
+
+    Same layout as delta_bias_faceted_by_element: transparent boxes, jitter colored by sampler,
+    one legend on the right. y-axis shows the posterior standard deviation (post_std), which
+    reflects how precisely each sampler pins down the corresponding Delta element.
+    """
+    df = load_recovery("delta") if df is None else df
+    df = df.copy()
+    df["element"] = df.apply(lambda r: delta_element_label(r["demo"], r["param"]), axis=1)
+    filters = {"n_chains": n_chains, "k_true": k_true}
+    sub = _apply_filters(df, filters).copy()
+    if sub.empty:
+        raise ValueError(f"No delta_recovery rows for n_chains={n_chains}, k_true={k_true}.")
+
+    sampler_order = [s for s in SAMPLER_ORDER if s in set(sub["sampler"])]
+    sub["sampler"] = pd.Categorical(sub["sampler"], categories=sampler_order, ordered=True)
+    element_order = (
+        sub.sort_values(["demo", "param"])["element"].drop_duplicates().tolist()
+    )
+    sub["element"] = pd.Categorical(sub["element"], categories=element_order, ordered=True)
+
+    counts = sub.groupby("sampler")["data_seed"].nunique().to_dict()
+    print(f"[delta_sd_faceted_by_element] n_chains={n_chains} k_true={k_true}: "
+          f"seeds/sampler={counts}")
+
+    color_vals = [SAMPLER_COLORS[s] for s in sampler_order]
+    n_comp = f"{k_true} True Component" + ("s" if k_true != 1 else "")
+
+    p = (
+        ggplot(sub, aes(x="sampler", y="post_std", color="sampler"))
+        + geom_jitter(width=0.2, height=0, size=0.8, alpha=0.45)
+        + geom_boxplot(fill="#FFFFFF00", outlier_alpha=0)
+        + facet_wrap("element", ncol=4, scales="free_y", labeller="label_value")
+        + scale_color_manual(values=color_vals, labels=[SAMPLER_LABELS.get(s, s) for s in sampler_order])
+        + scale_x_discrete(labels=[SAMPLER_LABELS.get(s, s) for s in sampler_order])
+        + labs(
+            x="Sampler",
+            y="Posterior SD",
+            color="Sampler",
+            title=f"Posterior SD of Δ - {n_comp}",
+        )
+        + theme_bw()
+        + theme(
+            figure_size=(14, 7),
+            axis_text_x=element_text(size=8),
+            plot_title=element_text(size=11),
+        )
+    )
+    return p
+
+
+def delta_rmse_faceted_by_element(n_chains: int = 2, k_true: int = 1,
+                                   df=None, *, jitter: bool = True) -> ggplot:
+    """Absolute error |post_mean - true_value| of Delta per element in a 4x2 grid.
+
+    Same layout as delta_bias_faceted_by_element. Each jittered point is one replicate
+    seed; the box summarizes the distribution of absolute errors across seeds.
+    Unlike bias, absolute error cannot cancel across seeds, so this directly shows
+    how large the typical estimation error is per element per sampler.
+    """
+    df = load_recovery("delta") if df is None else df
+    df = df.copy()
+    df["element"] = df.apply(lambda r: delta_element_label(r["demo"], r["param"]), axis=1)
+    df["abs_error"] = df["bias"].abs()
+    filters = {"n_chains": n_chains, "k_true": k_true}
+    sub = _apply_filters(df, filters).copy()
+    if sub.empty:
+        raise ValueError(f"No delta_recovery rows for n_chains={n_chains}, k_true={k_true}.")
+
+    sampler_order = [s for s in SAMPLER_ORDER if s in set(sub["sampler"])]
+    sub["sampler"] = pd.Categorical(sub["sampler"], categories=sampler_order, ordered=True)
+    element_order = (
+        sub.sort_values(["demo", "param"])["element"].drop_duplicates().tolist()
+    )
+    sub["element"] = pd.Categorical(sub["element"], categories=element_order, ordered=True)
+
+    counts = sub.groupby("sampler")["data_seed"].nunique().to_dict()
+    print(f"[delta_rmse_faceted_by_element] n_chains={n_chains} k_true={k_true}: "
+          f"seeds/sampler={counts}")
+
+    color_vals = [SAMPLER_COLORS[s] for s in sampler_order]
+    n_comp = f"{k_true} True Component" + ("s" if k_true != 1 else "")
+
+    p = (
+        ggplot(sub, aes(x="sampler", y="abs_error", color="sampler"))
+        + geom_jitter(width=0.2, height=0, size=0.8, alpha=0.45)
+        + geom_boxplot(fill="#FFFFFF00", outlier_alpha=0)
+        + facet_wrap("element", ncol=4, scales="free_y", labeller="label_value")
+        + scale_color_manual(values=color_vals, labels=[SAMPLER_LABELS.get(s, s) for s in sampler_order])
+        + scale_x_discrete(labels=[SAMPLER_LABELS.get(s, s) for s in sampler_order])
+        + labs(
+            x="Sampler",
+            y="|post_mean - true_value|",
+            color="Sampler",
+            title=f"Absolute Error of Δ - {n_comp}",
+        )
+        + theme_bw()
+        + theme(
+            figure_size=(14, 7),
+            axis_text_x=element_text(size=8),
+            plot_title=element_text(size=11),
+        )
+    )
+    return p
 
 
 def runtime_samplers_by_ktrue(n_chains: int = 2, df: Optional[pd.DataFrame] = None, *,
@@ -383,32 +491,72 @@ def runtime_samplers_by_ktrue(n_chains: int = 2, df: Optional[pd.DataFrame] = No
 
 def runtime_by_ktrue(sampler: str = "nuts", n_chains: int = 2,
                      df: Optional[pd.DataFrame] = None, *,
-                     unit: Optional[str] = None, jitter: bool = True) -> ggplot:
-    """Runtime by k_true for ONE sampler, on its own LINEAR y-scale - so each sampler's
-    variation across true-component counts is readable without NUTS's magnitude flattening the
-    others. x-axis = k_true (1/2/3/5), one box per scenario, points = per-seed sampling time.
+                     unit: Optional[str] = None, jitter: bool = True):
+    """Runtime by k_true for ONE sampler - transparent boxes, colored outline and jitter points.
 
     unit: 'h' (hours) or 'min' (minutes); default = hours for nuts, minutes for hmc/bayesm.
+    For NUTS (unit='h'): data stored in minutes, left axis = min., right axis = h. every 0.5h.
+    Returns a matplotlib Figure for NUTS (dual axis) or a ggplot for the others.
     """
     df = load_recovery("runs") if df is None else df
     df = df.copy()
     if unit is None:
         unit = "h" if sampler == "nuts" else "min"
-    divisor, ulab = (3600.0, "hours") if unit == "h" else (60.0, "minutes")
-    df["runtime"] = df["runtime_s"] / divisor
+    # Always store in minutes so the primary (left) axis is consistent.
+    df["runtime"] = df["runtime_s"] / 60.0
     filters = {"sampler": sampler, "n_chains": n_chains}
-    sub = _apply_filters(df, filters)
+    sub = _apply_filters(df, filters).copy()
     if sub.empty:
         raise ValueError(f"No runs for sampler={sampler}, n_chains={n_chains}.")
-    print(f"[runtime_by_ktrue] {sampler} c{n_chains} [{ulab}]: runs/k_true="
+    sub["k_true"] = pd.Categorical(sub["k_true"], categories=[1, 2, 3, 5], ordered=True)
+    print(f"[runtime_by_ktrue] {sampler} c{n_chains}: runs/k_true="
           f"{sub.groupby('k_true')['runtime_s'].count().to_dict()}")
-    return recovery_boxplot(
-        df, value="runtime", x="k_true", filters=filters, x_order=[1, 2, 3, 5],
-        hline=None, jitter=jitter, logy=False,
-        title=f"Runtime by true-component count - {SAMPLER_LABELS.get(sampler, sampler)} (n_chains={n_chains})",
-        xlab="k_true  (true number of mixture components)",
-        ylab=f"Runtime ({ulab})", figure_size=(7.5, 4.8),
+
+    color = SAMPLER_COLORS.get(sampler, "#888888")
+    label = SAMPLER_LABELS.get(sampler, sampler)
+
+    p = ggplot(sub, aes(x="k_true", y="runtime"))
+    if jitter:
+        p = p + geom_jitter(width=0.18, height=0, size=0.8, alpha=0.5, color=color)
+    p = (p
+         + geom_boxplot(fill="#FFFFFF00", color=color, outlier_alpha=0)
+         + labs(
+             x="Number of mixture components",
+             y="Runtime (min.)",
+             title=f"Runtime by Number of mixture components - {label}",
+         )
+         + theme_bw()
+         + theme(figure_size=(7.5, 4.8), plot_title=element_text(size=11))
     )
+
+    if unit != "h":
+        return p
+
+    # NUTS: draw the plotnine figure and add a secondary right-hand axis in hours.
+    fig = p.draw()
+    ax = fig.axes[0]
+    ymin, ymax = ax.get_ylim()
+
+    # Read the grey tick color from plotnine's themed x-axis labels (untouched by our code).
+    x_labels = ax.get_xticklabels()
+    tick_color = x_labels[0].get_color() if x_labels else "#4C4C4C"
+
+    # Left axis: minutes, ticks every 30 - grey tick numbers to match plotnine theme.
+    min_ticks = np.arange(np.ceil(ymin / 30) * 30, ymax, 30)
+    ax.set_yticks(min_ticks)
+    ax.set_yticklabels([str(int(m)) for m in min_ticks], color=tick_color)
+
+    # Right axis: hours, ticks every 1 - grey tick numbers, black axis title.
+    ax2 = ax.twinx()
+    ax2.set_ylim(ymin / 60, ymax / 60)
+    hour_ticks = np.arange(0, int(ymax / 60) + 1, 1)
+    ax2.set_yticks(hour_ticks)
+    ax2.set_yticklabels([str(int(h)) for h in hour_ticks], color=tick_color)
+    ax2.tick_params(axis="y", colors=tick_color)
+    ax2.set_ylabel("Runtime (h.)", color="black")
+    ax2.grid(False)
+
+    return fig
 
 
 def runtime_plot(df: Optional[pd.DataFrame] = None, *, logy: bool = True,
@@ -430,15 +578,8 @@ def runtime_plot(df: Optional[pd.DataFrame] = None, *, logy: bool = True,
 
 
 def main() -> None:
-    delta = load_recovery("delta")
-    print("== Delta bias by sampler, per k_true ==")
-    p_bias = delta_bias_plot(delta)
-    print("== Delta posterior SD by sampler, per k_true ==")
-    p_sd = delta_sd_plot(delta)
     print("== Runtime by sampler, per k_true ==")
     p_rt = runtime_plot()
-    print("wrote", save(p_bias, "delta_bias_by_sampler_ktrue.png"))
-    print("wrote", save(p_sd, "delta_sd_by_sampler_ktrue.png"))
     print("wrote", save(p_rt, "runtime_by_sampler_ktrue.png"))
 
 
