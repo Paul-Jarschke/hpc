@@ -31,8 +31,11 @@ import argparse
 import contextlib
 import csv
 import io
+import json
 import os
 import sys
+
+import numpy as np
 
 # Make the vendored DGP package importable regardless of the current working directory.
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -45,7 +48,14 @@ from dgp.experiment_configs import SCENARIOS  # noqa: E402
 # Experiment configuration
 # --------------------------------------------------------------------------------------
 EXPERIMENT = "k5model_mixture"
-SEEDS = range(1, 101)  # 1..100 inclusive
+# 1..105: 100 target seeds + a small buffer. bayesm's rhierMnlRwMixture refuses a dataset
+# unless EVERY alternative is chosen at least once (else "y takes on N values -- must be = p").
+# Such datasets occur occasionally in the homogeneous 1comp scenario (a dominated alternative
+# can get zero choices); in the current grid this is exactly kt1_s70 (only 3 of 4 alternatives
+# chosen), which bayesm cannot fit while NUTS/HMC can. We screen every dataset for this
+# (all_alts_chosen below) and the buffer lets params.R skip the unfittable ones and still
+# reach 100 fittable seeds/scenario.
+SEEDS = range(1, 106)  # 1..105 inclusive (100 target + 5 backfill buffer)
 
 # K_TRUE -> study scenario name (the vendored SCENARIOS dict is the single source of
 # truth for n_units/n_obs/n_alts/n_demos/custom_pvec).
@@ -60,8 +70,20 @@ OUT_DIR = os.path.join(SCRIPT_DIR, "in", EXPERIMENT)
 
 MANIFEST_FIELDS = [
     "dataset_key", "scenario", "k_true", "data_seed",
-    "n_units", "n_obs", "n_alts", "n_demos", "custom_pvec", "file",
+    "n_units", "n_obs", "n_alts", "n_demos", "custom_pvec",
+    "n_alts_chosen", "all_alts_chosen", "file",
 ]
+
+
+def count_alts_chosen(y) -> int:
+    """How many distinct alternatives appear in the pooled choice vector y.
+
+    bayesm::rhierMnlRwMixture requires this to equal n_alts (every alternative chosen at
+    least once across all units/observations); otherwise it aborts. The gradient samplers
+    (NUTS/HMC) have no such constraint. y is 0-indexed in the dataset JSON; only the count
+    of distinct values matters here, so the offset is irrelevant.
+    """
+    return int(np.unique(np.asarray(y).ravel()).size)
 
 
 def main(limit: int | None = None) -> None:
@@ -90,25 +112,36 @@ def main(limit: int | None = None) -> None:
 
         if os.path.exists(fpath):
             print("        exists -> skipping generation (kept byte-identical)")
+            with open(fpath) as fh:           # reload only to screen fittability
+                y = json.load(fh)["y"]
         else:
             data = generate_mixture_simulated_data(**cfg)
             # save_to_json prints a line per file; keep batch output quiet without editing
             # the vendored code.
             with contextlib.redirect_stdout(io.StringIO()):
                 save_to_json(data, fpath)
+            y = data["y"]
+
+        n_chosen = count_alts_chosen(y)
+        fittable = int(n_chosen == base_cfg["n_alts"])
+        if not fittable:
+            print(f"        NOT bayesm-fittable: only {n_chosen}/{base_cfg['n_alts']} "
+                  f"alternatives chosen (will be screened out of params.csv)")
 
         # Always record in the manifest so it spans every seed in SEEDS, even skipped ones.
         manifest_rows.append({
-            "dataset_key": dataset_key,
-            "scenario":    scenario,
-            "k_true":      k_true,
-            "data_seed":   seed,
-            "n_units":     base_cfg["n_units"],
-            "n_obs":       base_cfg["n_obs"],
-            "n_alts":      base_cfg["n_alts"],
-            "n_demos":     base_cfg["n_demos"],
-            "custom_pvec": base_cfg["custom_pvec"],
-            "file":        fname,
+            "dataset_key":     dataset_key,
+            "scenario":        scenario,
+            "k_true":          k_true,
+            "data_seed":       seed,
+            "n_units":         base_cfg["n_units"],
+            "n_obs":           base_cfg["n_obs"],
+            "n_alts":          base_cfg["n_alts"],
+            "n_demos":         base_cfg["n_demos"],
+            "custom_pvec":     base_cfg["custom_pvec"],
+            "n_alts_chosen":   n_chosen,
+            "all_alts_chosen": fittable,
+            "file":            fname,
         })
 
     manifest_path = os.path.join(OUT_DIR, "manifest.csv")

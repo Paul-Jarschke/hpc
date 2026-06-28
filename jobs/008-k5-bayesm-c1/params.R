@@ -49,8 +49,21 @@ manifest <- read_csv(
   show_col_types = FALSE
 )
 
+# bayesm cannot fit a dataset unless every alternative is chosen at least once; those are
+# screened in generate_mixture_data.py (all_alts_chosen == 0). Drop them, then keep the first
+# MAX_DATA_SEED FITTABLE seeds per scenario, so every sampler uses the SAME fittable datasets.
+excluded <- manifest |> dplyr::filter(all_alts_chosen == 0)
+if (nrow(excluded) > 0) {
+  cat("Screened out", nrow(excluded), "unfittable dataset(s):",
+      paste(excluded$dataset_key, collapse = ", "), "\n")
+}
+
 params <- manifest |>
-  filter(data_seed <= MAX_DATA_SEED) |>
+  filter(all_alts_chosen == 1) |>
+  group_by(k_true) |>
+  arrange(data_seed, .by_group = TRUE) |>
+  slice_head(n = MAX_DATA_SEED) |>
+  ungroup() |>
   select(dataset_key, scenario, k_true, data_seed) |>
   mutate(
     sampler     = "bayesm",
