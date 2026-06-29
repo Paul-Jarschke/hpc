@@ -21,6 +21,7 @@ from plot_recovery import load_recovery, DIR_FIG, delta_element_label  # noqa: E
 
 OUT_DIR_DELTA_BIAS = DIR_FIG / "delta" / "bias" / "tables"
 OUT_DIR_DELTA_SD   = DIR_FIG / "delta" / "sd"   / "tables"
+OUT_DIR_DELTA_RMSE = DIR_FIG / "delta" / "rmse" / "tables"
 OUT_DIR_RUNTIME    = DIR_FIG / "runtime" / "tables"
 
 CHAINS = 2
@@ -108,6 +109,49 @@ def delta_sd_summary_table(n_chains: int = CHAINS) -> pd.DataFrame:
     return agg[["k_true", "element", "sampler", *stat_cols, "n_sim"]].reset_index(drop=True)
 
 
+def delta_rmse_summary_table(n_chains: int = CHAINS) -> pd.DataFrame:
+    """Distribution of absolute error |post_mean - true_value| for every Delta element.
+
+    For each (k_true, element, sampler) cell the statistics summarize |bias| values
+    across all replicate seeds. Unlike the bias table (which reports the mean signed
+    error and its MCSE), this captures the typical magnitude of error regardless of
+    direction, matching what is shown in the RMSE boxplots.
+
+    Returns a tidy long DataFrame:
+        rows    = (k_true, element, sampler)
+        columns = min, q1, mean, median, q3, max, n_sim
+    """
+    df = load_recovery("delta")
+    df = df[df["n_chains"] == n_chains].copy()
+    df["element"] = df.apply(lambda r: delta_element_label(r["demo"], r["param"]), axis=1)
+    df["abs_error"] = df["bias"].abs()
+
+    def _agg(g):
+        a = g["abs_error"]
+        return pd.Series({
+            "min":    a.min(),
+            "q1":     a.quantile(0.25),
+            "mean":   a.mean(),
+            "median": a.median(),
+            "q3":     a.quantile(0.75),
+            "max":    a.max(),
+            "n_sim":  len(a),
+        })
+
+    agg = (
+        df.groupby(["k_true", "element", "sampler"])
+        .apply(_agg, include_groups=False)
+        .reset_index()
+    )
+    samplers_present = [s for s in SAMPLER_ORDER if s in agg["sampler"].unique()]
+    agg["sampler"] = pd.Categorical(agg["sampler"], categories=samplers_present, ordered=True)
+    agg["sampler"] = agg["sampler"].map(SAMPLER_LABELS)
+    agg = agg.sort_values(["k_true", "element", "sampler"])
+    stat_cols = ["min", "q1", "mean", "median", "q3", "max"]
+    agg[stat_cols] = agg[stat_cols].round(4)
+    return agg[["k_true", "element", "sampler", *stat_cols, "n_sim"]].reset_index(drop=True)
+
+
 def delta_bias_mcse_table(n_chains: int = CHAINS) -> pd.DataFrame:
     """Bias and Monte Carlo SE for every Delta element, by sampler and k_true.
 
@@ -155,6 +199,7 @@ def delta_bias_mcse_table(n_chains: int = CHAINS) -> pd.DataFrame:
 def main():
     OUT_DIR_DELTA_BIAS.mkdir(parents=True, exist_ok=True)
     OUT_DIR_DELTA_SD.mkdir(parents=True, exist_ok=True)
+    OUT_DIR_DELTA_RMSE.mkdir(parents=True, exist_ok=True)
     OUT_DIR_RUNTIME.mkdir(parents=True, exist_ok=True)
 
     # --- Delta bias / MCSE tables ---
@@ -167,6 +212,19 @@ def main():
     for kt in sorted(tbl["k_true"].unique()):
         sub = tbl[tbl["k_true"] == kt].drop(columns="k_true")
         path = OUT_DIR_DELTA_BIAS / f"delta_bias_mcse_c{CHAINS}_kt{int(kt)}.csv"
+        sub.to_csv(path, index=False)
+        print(f"wrote {len(sub)} rows -> {path}")
+
+    # --- Delta absolute error / RMSE tables ---
+    rmse = delta_rmse_summary_table()
+
+    path = OUT_DIR_DELTA_RMSE / f"delta_rmse_summary_c{CHAINS}_all.csv"
+    rmse.to_csv(path, index=False)
+    print(f"wrote {len(rmse)} rows -> {path}")
+
+    for kt in sorted(rmse["k_true"].unique()):
+        sub = rmse[rmse["k_true"] == kt].drop(columns="k_true")
+        path = OUT_DIR_DELTA_RMSE / f"delta_rmse_summary_c{CHAINS}_kt{int(kt)}.csv"
         sub.to_csv(path, index=False)
         print(f"wrote {len(sub)} rows -> {path}")
 
