@@ -325,7 +325,7 @@ def delta_bias_faceted_by_element(n_chains: int = 2, k_true: int = 1,
     )
     sub["element"] = pd.Categorical(sub["element"], categories=element_order, ordered=True)
 
-    counts = sub.groupby("sampler")["data_seed"].nunique().to_dict()
+    counts = sub.groupby("sampler", observed=True)["data_seed"].nunique().to_dict()
     print(f"[delta_bias_faceted_by_element] n_chains={n_chains} k_true={k_true}: "
           f"seeds/sampler={counts}")
 
@@ -333,26 +333,20 @@ def delta_bias_faceted_by_element(n_chains: int = 2, k_true: int = 1,
     n_comp = f"{k_true} True Component" + ("s" if k_true != 1 else "")
 
     # Draw jitter first (behind box outline), then transparent box on top so both are visible.
-    p = (
-        ggplot(sub, aes(x="sampler", y="bias", color="sampler"))
-        + geom_hline(yintercept=0, linetype="dashed", color="#aaaaaa")
-        + geom_jitter(width=0.2, height=0, size=0.8, alpha=0.45)
-        + geom_boxplot(fill="#FFFFFF00", outlier_alpha=0)
-        + facet_wrap("element", ncol=4, scales="free_y", labeller="label_value")
-        + scale_color_manual(values=color_vals, labels=[SAMPLER_LABELS.get(s, s) for s in sampler_order])
-        + scale_x_discrete(labels=[SAMPLER_LABELS.get(s, s) for s in sampler_order])
-        + labs(
-            x="Sampler",
-            y="Empirical Bias",
-            color="Sampler",
-            title=f"Empirical Bias of Δ - {n_comp}",
-        )
-        + theme_bw()
-        + theme(
-            figure_size=(14, 7),
-            axis_text_x=element_text(size=8),
-            plot_title=element_text(size=11),
-        )
+    p = ggplot(sub, aes(x="sampler", y="bias", color="sampler"))
+    p = p + geom_hline(yintercept=0, linetype="dashed", color="#aaaaaa")
+    if jitter:
+        p = p + geom_jitter(width=0.2, height=0, size=0.8, alpha=0.45)
+    p = (p
+         + geom_boxplot(fill="#FFFFFF00", outlier_alpha=0)
+         + facet_wrap("element", ncol=4, scales="free_y", labeller="label_value")
+         + scale_color_manual(values=color_vals, labels=[SAMPLER_LABELS.get(s, s) for s in sampler_order])
+         + scale_x_discrete(labels=[SAMPLER_LABELS.get(s, s) for s in sampler_order])
+         + labs(x="Sampler", y="Empirical Bias", color="Sampler",
+                title=f"Empirical Bias of Δ - {n_comp}")
+         + theme_bw()
+         + theme(figure_size=(14, 7), axis_text_x=element_text(size=8),
+                 plot_title=element_text(size=11))
     )
     return p
 
@@ -380,32 +374,26 @@ def delta_sd_faceted_by_element(n_chains: int = 2, k_true: int = 1,
     )
     sub["element"] = pd.Categorical(sub["element"], categories=element_order, ordered=True)
 
-    counts = sub.groupby("sampler")["data_seed"].nunique().to_dict()
+    counts = sub.groupby("sampler", observed=True)["data_seed"].nunique().to_dict()
     print(f"[delta_sd_faceted_by_element] n_chains={n_chains} k_true={k_true}: "
           f"seeds/sampler={counts}")
 
     color_vals = [SAMPLER_COLORS[s] for s in sampler_order]
     n_comp = f"{k_true} True Component" + ("s" if k_true != 1 else "")
 
-    p = (
-        ggplot(sub, aes(x="sampler", y="post_std", color="sampler"))
-        + geom_jitter(width=0.2, height=0, size=0.8, alpha=0.45)
-        + geom_boxplot(fill="#FFFFFF00", outlier_alpha=0)
-        + facet_wrap("element", ncol=4, scales="free_y", labeller="label_value")
-        + scale_color_manual(values=color_vals, labels=[SAMPLER_LABELS.get(s, s) for s in sampler_order])
-        + scale_x_discrete(labels=[SAMPLER_LABELS.get(s, s) for s in sampler_order])
-        + labs(
-            x="Sampler",
-            y="Posterior SD",
-            color="Sampler",
-            title=f"Posterior SD of Δ - {n_comp}",
-        )
-        + theme_bw()
-        + theme(
-            figure_size=(14, 7),
-            axis_text_x=element_text(size=8),
-            plot_title=element_text(size=11),
-        )
+    p = ggplot(sub, aes(x="sampler", y="post_std", color="sampler"))
+    if jitter:
+        p = p + geom_jitter(width=0.2, height=0, size=0.8, alpha=0.45)
+    p = (p
+         + geom_boxplot(fill="#FFFFFF00", outlier_alpha=0)
+         + facet_wrap("element", ncol=4, scales="free_y", labeller="label_value")
+         + scale_color_manual(values=color_vals, labels=[SAMPLER_LABELS.get(s, s) for s in sampler_order])
+         + scale_x_discrete(labels=[SAMPLER_LABELS.get(s, s) for s in sampler_order])
+         + labs(x="Sampler", y="Posterior SD", color="Sampler",
+                title=f"Posterior SD of Δ - {n_comp}")
+         + theme_bw()
+         + theme(figure_size=(14, 7), axis_text_x=element_text(size=8),
+                 plot_title=element_text(size=11))
     )
     return p
 
@@ -435,32 +423,26 @@ def delta_rmse_faceted_by_element(n_chains: int = 2, k_true: int = 1,
     )
     sub["element"] = pd.Categorical(sub["element"], categories=element_order, ordered=True)
 
-    counts = sub.groupby("sampler")["data_seed"].nunique().to_dict()
+    counts = sub.groupby("sampler", observed=True)["data_seed"].nunique().to_dict()
     print(f"[delta_rmse_faceted_by_element] n_chains={n_chains} k_true={k_true}: "
           f"seeds/sampler={counts}")
 
     color_vals = [SAMPLER_COLORS[s] for s in sampler_order]
     n_comp = f"{k_true} True Component" + ("s" if k_true != 1 else "")
 
-    p = (
-        ggplot(sub, aes(x="sampler", y="abs_error", color="sampler"))
-        + geom_jitter(width=0.2, height=0, size=0.8, alpha=0.45)
-        + geom_boxplot(fill="#FFFFFF00", outlier_alpha=0)
-        + facet_wrap("element", ncol=4, scales="free_y", labeller="label_value")
-        + scale_color_manual(values=color_vals, labels=[SAMPLER_LABELS.get(s, s) for s in sampler_order])
-        + scale_x_discrete(labels=[SAMPLER_LABELS.get(s, s) for s in sampler_order])
-        + labs(
-            x="Sampler",
-            y="|post_mean - true_value|",
-            color="Sampler",
-            title=f"Absolute Error of Δ - {n_comp}",
-        )
-        + theme_bw()
-        + theme(
-            figure_size=(14, 7),
-            axis_text_x=element_text(size=8),
-            plot_title=element_text(size=11),
-        )
+    p = ggplot(sub, aes(x="sampler", y="abs_error", color="sampler"))
+    if jitter:
+        p = p + geom_jitter(width=0.2, height=0, size=0.8, alpha=0.45)
+    p = (p
+         + geom_boxplot(fill="#FFFFFF00", outlier_alpha=0)
+         + facet_wrap("element", ncol=4, scales="free_y", labeller="label_value")
+         + scale_color_manual(values=color_vals, labels=[SAMPLER_LABELS.get(s, s) for s in sampler_order])
+         + scale_x_discrete(labels=[SAMPLER_LABELS.get(s, s) for s in sampler_order])
+         + labs(x="Sampler", y="|post_mean - true_value|", color="Sampler",
+                title=f"Absolute Error of Δ - {n_comp}")
+         + theme_bw()
+         + theme(figure_size=(14, 7), axis_text_x=element_text(size=8),
+                 plot_title=element_text(size=11))
     )
     return p
 
@@ -479,7 +461,7 @@ def runtime_samplers_by_ktrue(n_chains: int = 2, df: Optional[pd.DataFrame] = No
     if sub.empty:
         raise ValueError(f"No runs for n_chains={n_chains}.")
     print(f"[runtime_samplers_by_ktrue] n_chains={n_chains}: runs/sampler="
-          f"{sub.groupby('sampler')['runtime_s'].count().to_dict()}")
+          f"{sub.groupby('sampler', observed=True)['runtime_s'].count().to_dict()}")
     return recovery_boxplot(
         df, value="runtime_s", x="k_true", color="sampler", filters=filters,
         x_order=[1, 2, 3, 5], hline=None, jitter=jitter, logy=logy,
@@ -510,7 +492,7 @@ def runtime_by_ktrue(sampler: str = "nuts", n_chains: int = 2,
         raise ValueError(f"No runs for sampler={sampler}, n_chains={n_chains}.")
     sub["k_true"] = pd.Categorical(sub["k_true"], categories=[1, 2, 3, 5], ordered=True)
     print(f"[runtime_by_ktrue] {sampler} c{n_chains}: runs/k_true="
-          f"{sub.groupby('k_true')['runtime_s'].count().to_dict()}")
+          f"{sub.groupby('k_true', observed=True)['runtime_s'].count().to_dict()}")
 
     color = SAMPLER_COLORS.get(sampler, "#888888")
     label = SAMPLER_LABELS.get(sampler, sampler)
