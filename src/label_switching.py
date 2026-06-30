@@ -284,6 +284,26 @@ def component_convergence_table(posterior_samples, K, K_true=None, label="", all
     return df
 
 
+def pvec_mean_table(posterior_samples, relabeled, K):
+    """Mean component weight per slot, BEFORE and AFTER ECR relabeling.
+
+    Mirrors the analysis notebook's two pvec convergence tables (pvec_before_tbl /
+    pvec_after_tbl), but keeps only the mean weights and returns ONE tidy long frame
+    so every HPC run can log it as a per-run CSV. Each stage is ranked INDEPENDENTLY
+    by descending mean weight - read BY RANK within a stage, NOT row-to-row across
+    stages (before relabeling the raw labels have no stable identity; that IS label
+    switching). Columns: stage ('before'|'after'), rank (0 = heaviest), pvec_mean."""
+    stages = [("before", np.asarray(analysis._recover_pvec(posterior_samples))),
+              ("after",  np.asarray(analysis._recover_pvec(relabeled)))]
+    rows = []
+    for stage, pvec in stages:
+        C, S, _ = pvec.shape
+        means = np.sort(pvec.reshape(C * S, K).mean(axis=0))[::-1]   # descending
+        for rank, m in enumerate(means):
+            rows.append({"stage": stage, "rank": rank, "pvec_mean": float(m)})
+    return pd.DataFrame(rows)
+
+
 def plot_before_after_traces(before, after, K, title="", true_vals=None, K_true=None, ylim=None):
     """Overlaid chain traces for ALL K components, raw (before) vs relabeled (after).
 
