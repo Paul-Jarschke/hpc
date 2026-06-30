@@ -26,6 +26,7 @@ from plot_recovery import (  # noqa: E402
     beta_correlation_by_ktrue,
     beta_coverage_by_param,
     beta_coverage_by_ktrue,
+    marginal_metric_boxplot,
     marginal_distance_by_ktrue,
     marginal_distances_faceted_by_metric,
     MARGINAL_METRICS,
@@ -83,14 +84,27 @@ def main():
         save(beta_coverage_by_param(CHAINS, kt), f"beta/coverage/plots/beta_coverage_c{CHAINS}_kt{kt}.png")
     save(beta_coverage_by_ktrue(CHAINS), f"beta/coverage/plots/beta_coverage_by_ktrue_c{CHAINS}.png")
 
-    # Marginal distances: per metric (x=k_true, facet=param, dodge=sampler) + per-k_true all-metric grid.
+    # Marginal comparison: all output under marginal_comparison/. Per metric a sampler boxplot
+    # (x=sampler, k_true x param grid) + the by-k_true view; plus the per-k_true all-metric grid.
+    # Guarded so a partial-data run (e.g. kt5 not finished yet) plots what's available, not aborts.
     for metric in MARGINAL_METRICS:
         slug = metric.lower().replace("-", "").replace(" ", "_")
-        save(marginal_distance_by_ktrue(CHAINS, metric),
-             f"marginal/plots/marginal_{slug}_by_ktrue_c{CHAINS}.png")
+        try:
+            save(marginal_metric_boxplot(metric, CHAINS),
+                 f"marginal_comparison/plots/{slug}_boxplot_c{CHAINS}.png")
+        except ValueError as e:
+            print(f"  skip {slug}_boxplot: {e}")
+        try:
+            save(marginal_distance_by_ktrue(CHAINS, metric),
+                 f"marginal_comparison/plots/{slug}_by_ktrue_c{CHAINS}.png")
+        except ValueError as e:
+            print(f"  skip {slug}_by_ktrue: {e}")
     for kt in KTRUE:
-        save(marginal_distances_faceted_by_metric(CHAINS, kt),
-             f"marginal/plots/marginal_all_metrics_c{CHAINS}_kt{kt}.png")
+        try:
+            save(marginal_distances_faceted_by_metric(CHAINS, kt),
+                 f"marginal_comparison/plots/all_metrics_c{CHAINS}_kt{kt}.png")
+        except ValueError as e:
+            print(f"  skip all_metrics_kt{kt}: {e}")
 
     print("regenerated all figures -> analysis/out/k5_results/")
 

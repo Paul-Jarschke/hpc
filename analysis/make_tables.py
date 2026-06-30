@@ -29,7 +29,7 @@ OUT_DIR_RUNTIME        = DIR_FIG / "runtime" / "tables"
 OUT_DIR_BETA_RMSE        = DIR_FIG / "beta" / "rmse"        / "tables"
 OUT_DIR_BETA_CORRELATION = DIR_FIG / "beta" / "correlation" / "tables"
 OUT_DIR_BETA_COVERAGE    = DIR_FIG / "beta" / "coverage"    / "tables"
-OUT_DIR_MARGINAL         = DIR_FIG / "marginal" / "tables"
+OUT_DIR_MARGINAL         = DIR_FIG / "marginal_comparison" / "tables"
 
 _PARAM_ORDER = ["Alt1", "Alt2", "Alt3", "Price"]
 

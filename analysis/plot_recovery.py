@@ -889,6 +889,65 @@ def marginal_distances_faceted_by_metric(n_chains: int = 2, k_true: int = 1,
     return p
 
 
+def marginal_metric_boxplot(metric: str = "Hellinger", n_chains: int = 2,
+                            df=None, *, jitter: bool = True) -> ggplot:
+    """Per-metric marginal-distance boxplot comparing the samplers against the true DGP.
+
+    x-axis = sampler, faceted as a k_true (rows) x param (cols) grid, free y per panel.
+    Each box pools the replicate seeds for that (k_true, param, sampler) cell; each point is
+    one fit. Directly answers: under `metric`, which sampler's fitted marginal sits closest
+    to the true DGP marginal, per parameter and per overspecification level.
+
+    Non-finite values are dropped (e.g. KL = inf where the model has mass in the true
+    marginal's deep tail), so the boxplot renders cleanly; a note prints how many were cut.
+    `metric` is one of MARGINAL_METRICS.
+    """
+    df = load_recovery("marginal_distances") if df is None else df
+    sub = df[df["n_chains"] == n_chains].copy()
+    if sub.empty:
+        raise ValueError(f"No marginal_distances rows for n_chains={n_chains}.")
+    if metric not in sub.columns:
+        raise ValueError(f"Metric '{metric}' not in marginal_distances columns. "
+                         f"Available: {[c for c in MARGINAL_METRICS if c in sub.columns]}")
+
+    n_total = len(sub)
+    sub = sub[np.isfinite(sub[metric])]
+    n_cut = n_total - len(sub)
+    if sub.empty:
+        raise ValueError(f"All {metric} values non-finite for n_chains={n_chains}.")
+
+    sampler_order = [s for s in SAMPLER_ORDER if s in set(sub["sampler"])]
+    param_order = [p for p in _PARAM_ORDER if p in set(sub["param"])]
+    ktrue_order = [str(k) for k in sorted(sub["k_true"].unique())]
+    sub["sampler"] = pd.Categorical(sub["sampler"], categories=sampler_order, ordered=True)
+    sub["param"] = pd.Categorical(sub["param"], categories=param_order, ordered=True)
+    sub["k_true"] = pd.Categorical(sub["k_true"].astype(str), categories=ktrue_order, ordered=True)
+
+    counts = sub.groupby(["sampler", "k_true"], observed=True)["data_seed"].nunique().to_dict()
+    print(f"[marginal_metric_boxplot] {metric} c{n_chains}: seeds/box={counts}"
+          + (f"  (dropped {n_cut} non-finite)" if n_cut else ""))
+
+    color_vals = [SAMPLER_COLORS[s] for s in sampler_order]
+    ylabel = MARGINAL_METRIC_LABELS.get(metric, metric)
+
+    p = ggplot(sub, aes(x="sampler", y=metric, color="sampler"))
+    if jitter:
+        p = p + geom_jitter(width=0.2, height=0, size=0.7, alpha=0.4)
+    p = (p
+         + geom_boxplot(fill="#FFFFFF00", outlier_alpha=0)
+         + facet_grid(rows="k_true", cols="param", scales="free_y", labeller="label_both")
+         + scale_color_manual(values=color_vals,
+                              labels=[SAMPLER_LABELS.get(s, s) for s in sampler_order])
+         + scale_x_discrete(labels=[SAMPLER_LABELS.get(s, s) for s in sampler_order])
+         + labs(x="Sampler", y=ylabel, color="Sampler",
+                title=f"{ylabel} of fitted marginal vs True DGP  (c{n_chains})")
+         + theme_bw()
+         + theme(figure_size=(12, 9), axis_text_x=element_text(size=7),
+                 plot_title=element_text(size=11))
+    )
+    return p
+
+
 def runtime_samplers_by_ktrue(n_chains: int = 2, df: Optional[pd.DataFrame] = None, *,
                               logy: bool = True, jitter: bool = False) -> ggplot:
     """Runtime by true-component count, with the SAMPLERS side by side (same layout as
