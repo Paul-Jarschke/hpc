@@ -15,9 +15,20 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from plot_recovery import (  # noqa: E402
     save,
+    compute_beta_correlation,
     delta_bias_faceted_by_element,
     delta_sd_faceted_by_element,
     delta_rmse_faceted_by_element,
+    delta_coverage_faceted_by_element,
+    delta_coverage_by_ktrue,
+    beta_rmse_by_param,
+    beta_correlation_by_param,
+    beta_correlation_by_ktrue,
+    beta_coverage_by_param,
+    beta_coverage_by_ktrue,
+    marginal_distance_by_ktrue,
+    marginal_distances_faceted_by_metric,
+    MARGINAL_METRICS,
     runtime_by_ktrue,
     runtime_samplers_by_ktrue,
 )
@@ -40,6 +51,13 @@ def main():
     for kt in KTRUE:
         save(delta_rmse_faceted_by_element(CHAINS, kt), f"delta/rmse/plots/delta_rmse_elements_c2_kt{kt}.png")
 
+    # Delta coverage: bar chart, one bar per sampler per element, 95% reference line.
+    for kt in KTRUE:
+        save(delta_coverage_faceted_by_element(CHAINS, kt), f"delta/coverage/plots/delta_coverage_c2_kt{kt}.png")
+
+    # Delta coverage by k_true: dodged bars (sampler) on x=k_true, all k_true in one figure.
+    save(delta_coverage_by_ktrue(CHAINS), f"delta/coverage/plots/delta_coverage_by_ktrue_c{CHAINS}.png")
+
     # Runtime: per sampler by k_true (nuts in hours, hmc/bayesm in minutes, linear).
     for s in SAMPLERS:
         save(runtime_by_ktrue(s, CHAINS), f"runtime/plots/runtime_{s}_c2_by_ktrue.png")
@@ -47,9 +65,34 @@ def main():
     # Runtime: all samplers in one figure (log scale).
     save(runtime_samplers_by_ktrue(CHAINS), "runtime/plots/runtime_samplers_c2_by_ktrue.png")
 
-    # Beta recovery plots go to beta/ (not yet implemented).
+    # Beta RMSE: 1x4 parameter grid, distribution over seeds.
+    for kt in KTRUE:
+        save(beta_rmse_by_param(CHAINS, kt), f"beta/rmse/plots/beta_rmse_c{CHAINS}_kt{kt}.png")
 
-    print("regenerated all figures -> analysis/out/k5_results/{delta/bias,delta/sd,runtime}/plots/")
+    # Beta correlation: load beta_summary once (1.68M rows) then reuse across all k_true.
+    print("computing beta correlations from beta_summary.csv ...")
+    corr_df = compute_beta_correlation()
+    for kt in KTRUE:
+        save(beta_correlation_by_param(CHAINS, kt, corr_df=corr_df),
+             f"beta/correlation/plots/beta_correlation_c{CHAINS}_kt{kt}.png")
+    save(beta_correlation_by_ktrue(CHAINS, corr_df=corr_df),
+         f"beta/correlation/plots/beta_correlation_by_ktrue_c{CHAINS}.png")
+
+    # Beta coverage: bar chart per k_true + one combined by-k_true figure.
+    for kt in KTRUE:
+        save(beta_coverage_by_param(CHAINS, kt), f"beta/coverage/plots/beta_coverage_c{CHAINS}_kt{kt}.png")
+    save(beta_coverage_by_ktrue(CHAINS), f"beta/coverage/plots/beta_coverage_by_ktrue_c{CHAINS}.png")
+
+    # Marginal distances: per metric (x=k_true, facet=param, dodge=sampler) + per-k_true all-metric grid.
+    for metric in MARGINAL_METRICS:
+        slug = metric.lower().replace("-", "").replace(" ", "_")
+        save(marginal_distance_by_ktrue(CHAINS, metric),
+             f"marginal/plots/marginal_{slug}_by_ktrue_c{CHAINS}.png")
+    for kt in KTRUE:
+        save(marginal_distances_faceted_by_metric(CHAINS, kt),
+             f"marginal/plots/marginal_all_metrics_c{CHAINS}_kt{kt}.png")
+
+    print("regenerated all figures -> analysis/out/k5_results/")
 
 
 if __name__ == "__main__":

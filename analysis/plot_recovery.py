@@ -39,14 +39,19 @@ from plotnine import (
     element_text,
     facet_grid,
     facet_wrap,
+    coord_cartesian,
     geom_boxplot,
+    geom_col,
     geom_hline,
     geom_jitter,
+    geom_point,
     ggplot,
     labs,
+    position_dodge,
     scale_color_manual,
     scale_fill_manual,
     scale_x_discrete,
+    scale_y_continuous,
     scale_y_log10,
     theme,
     theme_bw,
@@ -104,9 +109,20 @@ RECOVERY_FILES = {
     "mu": "mu_recovery.csv",
     "sigma": "sigma_recovery.csv",
     "beta": "beta_recovery.csv",
+    "beta_summary": "beta_summary.csv",
     "runs": "runs.csv",
     "ecr": "ecr_report.csv",
     "diagnostics": "diagnostics.csv",
+    "marginal_distances": "marginal_distances.csv",
+}
+
+MARGINAL_METRICS = ["Hellinger", "KL", "JSD", "TVD", "Wasserstein1"]
+MARGINAL_METRIC_LABELS = {
+    "Hellinger": "Hellinger Distance",
+    "KL": "KL Divergence (model || true)",
+    "JSD": "Jensen-Shannon Divergence",
+    "TVD": "Total Variation Distance",
+    "Wasserstein1": "Wasserstein-1 Distance",
 }
 
 
@@ -443,6 +459,432 @@ def delta_rmse_faceted_by_element(n_chains: int = 2, k_true: int = 1,
          + theme_bw()
          + theme(figure_size=(14, 7), axis_text_x=element_text(size=8),
                  plot_title=element_text(size=11))
+    )
+    return p
+
+
+def delta_coverage_faceted_by_element(n_chains: int = 2, k_true: int = 1,
+                                       df=None) -> ggplot:
+    """Empirical 95% CI coverage rate for each Delta element, per sampler.
+
+    Coverage = (number of seeds where true_value falls in the 95% credible interval)
+               / n_sim * 100.  One bar per sampler per element; dashed reference at 95%.
+    A well-calibrated sampler should land near 95% for every element.
+    """
+    df = load_recovery("delta") if df is None else df
+    df = df.copy()
+    df["element"] = df.apply(lambda r: delta_element_label(r["demo"], r["param"]), axis=1)
+    df["in_ci"] = df["in_ci"].astype(bool)
+    filters = {"n_chains": n_chains, "k_true": k_true}
+    sub = _apply_filters(df, filters).copy()
+    if sub.empty:
+        raise ValueError(f"No delta_recovery rows for n_chains={n_chains}, k_true={k_true}.")
+
+    # Aggregate to one coverage value per (element, sampler).
+    cov = (
+        sub.groupby(["element", "demo", "param", "sampler"], observed=True)["in_ci"]
+        .mean()
+        .mul(100)
+        .reset_index()
+        .rename(columns={"in_ci": "coverage_pct"})
+    )
+
+    sampler_order = [s for s in SAMPLER_ORDER if s in set(cov["sampler"])]
+    cov["sampler"] = pd.Categorical(cov["sampler"], categories=sampler_order, ordered=True)
+    element_order = (
+        cov.sort_values(["demo", "param"])["element"].drop_duplicates().tolist()
+    )
+    cov["element"] = pd.Categorical(cov["element"], categories=element_order, ordered=True)
+
+    fill_vals = [SAMPLER_COLORS[s] for s in sampler_order]
+    n_comp = f"{k_true} True Component" + ("s" if k_true != 1 else "")
+
+    p = (
+        ggplot(cov, aes(x="sampler", y="coverage_pct", fill="sampler"))
+        + geom_col(width=0.6)
+        + geom_hline(yintercept=95, linetype="dashed", color="#555555", size=0.8)
+        + facet_wrap("element", ncol=4, labeller="label_value")
+        + scale_fill_manual(values=fill_vals,
+                            labels=[SAMPLER_LABELS.get(s, s) for s in sampler_order])
+        + scale_x_discrete(labels=[SAMPLER_LABELS.get(s, s) for s in sampler_order])
+        + scale_y_continuous(breaks=[80, 85, 90, 95, 100])
+        + coord_cartesian(ylim=(80, 100))
+        + labs(x="Sampler", y="Coverage (%)", fill="Sampler",
+               title=f"Empirical 95% CI Coverage of Δ - {n_comp}")
+        + theme_bw()
+        + theme(figure_size=(14, 7), axis_text_x=element_text(size=8),
+                plot_title=element_text(size=11))
+    )
+    return p
+
+
+def delta_coverage_by_ktrue(n_chains: int = 2, df=None) -> ggplot:
+    """Empirical 95% CI coverage of Delta elements across true component counts.
+
+    x-axis = k_true, bars dodged by sampler, faceted 4x2 by element.
+    Shows whether coverage degrades as the model is overspecified (k_model > k_true).
+    """
+    df = load_recovery("delta") if df is None else df
+    df = df[df["n_chains"] == n_chains].copy()
+    if df.empty:
+        raise ValueError(f"No delta_recovery rows for n_chains={n_chains}.")
+
+    df["element"] = df.apply(lambda r: delta_element_label(r["demo"], r["param"]), axis=1)
+    df["in_ci"] = df["in_ci"].astype(bool)
+
+    cov = (
+        df.groupby(["element", "demo", "param", "sampler", "k_true"], observed=True)["in_ci"]
+        .mean().mul(100).reset_index()
+        .rename(columns={"in_ci": "coverage_pct"})
+    )
+
+    sampler_order = [s for s in SAMPLER_ORDER if s in set(cov["sampler"])]
+    ktrue_order = [str(k) for k in sorted(cov["k_true"].unique())]
+    cov["sampler"] = pd.Categorical(cov["sampler"], categories=sampler_order, ordered=True)
+    cov["k_true"] = pd.Categorical(cov["k_true"].astype(str), categories=ktrue_order, ordered=True)
+    element_order = cov.sort_values(["demo", "param"])["element"].drop_duplicates().tolist()
+    cov["element"] = pd.Categorical(cov["element"], categories=element_order, ordered=True)
+
+    fill_vals = [SAMPLER_COLORS[s] for s in sampler_order]
+
+    p = (
+        ggplot(cov, aes(x="k_true", y="coverage_pct", fill="sampler"))
+        + geom_col(position="dodge", width=0.7)
+        + geom_hline(yintercept=95, linetype="dashed", color="#555555", size=0.8)
+        + facet_wrap("element", ncol=4, labeller="label_value")
+        + scale_fill_manual(values=fill_vals,
+                            labels=[SAMPLER_LABELS.get(s, s) for s in sampler_order])
+        + scale_y_continuous(breaks=[80, 85, 90, 95, 100])
+        + coord_cartesian(ylim=(80, 100))
+        + labs(x="True Components (k_true)", y="Coverage (%)", fill="Sampler",
+               title=f"Empirical 95% CI Coverage of Δ by True Components (c{n_chains})")
+        + theme_bw()
+        + theme(figure_size=(14, 7), axis_text_x=element_text(size=9),
+                plot_title=element_text(size=11))
+    )
+    return p
+
+
+def _beta_boxplot(df: pd.DataFrame, y_col: str, y_label: str,
+                  title: str, sampler_order: list, *, jitter: bool) -> ggplot:
+    """Shared core for beta per-param boxplots (bias / rmse / mae)."""
+    param_order = [p for p in _PARAM_ORDER if p in set(df["param"])]
+    df = df.copy()
+    df["param"] = pd.Categorical(df["param"], categories=param_order, ordered=True)
+    color_vals = [SAMPLER_COLORS[s] for s in sampler_order]
+
+    p = ggplot(df, aes(x="sampler", y=y_col, color="sampler"))
+    if jitter:
+        p = p + geom_jitter(width=0.2, height=0, size=0.8, alpha=0.45)
+    p = (p
+         + geom_boxplot(fill="#FFFFFF00", outlier_alpha=0)
+         + facet_wrap("param", ncol=4, scales="free_y", labeller="label_value")
+         + scale_color_manual(values=color_vals,
+                              labels=[SAMPLER_LABELS.get(s, s) for s in sampler_order])
+         + scale_x_discrete(labels=[SAMPLER_LABELS.get(s, s) for s in sampler_order])
+         + labs(x="Sampler", y=y_label, color="Sampler", title=title)
+         + theme_bw()
+         + theme(figure_size=(12, 5), axis_text_x=element_text(size=8),
+                 plot_title=element_text(size=11))
+    )
+    return p
+
+
+def compute_beta_correlation(df_summary=None) -> pd.DataFrame:
+    """Compute per-run per-param Pearson correlation between post_mean and true_value.
+
+    Loads beta_summary.csv (1.68M rows) and returns one row per
+    (dataset_key, scenario, k_true, data_seed, k_model, sampler, n_chains, param)
+    with a `correlation` column: corr_i(post_mean_i, true_value_i) across 330 units.
+    """
+    if df_summary is None:
+        df_summary = load_recovery("beta_summary")
+    group_cols = [
+        "dataset_key", "scenario", "k_true", "data_seed",
+        "k_model", "sampler", "n_chains", "param",
+    ]
+    corr = (
+        df_summary.groupby(group_cols, observed=True)
+        .apply(lambda g: g["post_mean"].corr(g["true_value"]), include_groups=False)
+        .reset_index()
+        .rename(columns={0: "correlation"})
+    )
+    return corr
+
+
+def beta_bias_by_param(n_chains: int = 2, k_true: int = 1,
+                       df=None, *, jitter: bool = True) -> ggplot:
+    """Bias (mean post_mean - true_value over 330 units) per beta parameter.
+
+    One boxplot per (sampler, param), distribution over replicate seeds.
+    Faceted by parameter (Alt1/Alt2/Alt3/Price) in a single row of 4 panels.
+    """
+    df = load_recovery("beta") if df is None else df
+    sub = _apply_filters(df, {"n_chains": n_chains, "k_true": k_true}).copy()
+    if sub.empty:
+        raise ValueError(f"No beta_recovery rows for n_chains={n_chains}, k_true={k_true}.")
+    sampler_order = [s for s in SAMPLER_ORDER if s in set(sub["sampler"])]
+    sub["sampler"] = pd.Categorical(sub["sampler"], categories=sampler_order, ordered=True)
+    n_comp = f"{k_true} True Component" + ("s" if k_true != 1 else "")
+    counts = sub.groupby("sampler", observed=True)["data_seed"].nunique().to_dict()
+    print(f"[beta_bias_by_param] n_chains={n_chains} k_true={k_true}: seeds/sampler={counts}")
+    return _beta_boxplot(sub, "bias", "Bias (post_mean - true_value)",
+                         f"Beta Bias by Parameter - {n_comp}", sampler_order, jitter=jitter)
+
+
+def beta_rmse_by_param(n_chains: int = 2, k_true: int = 1,
+                       df=None, *, jitter: bool = True) -> ggplot:
+    """RMSE of beta_i posteriors per parameter (aggregated over 330 decision units).
+
+    RMSE = sqrt(mean((post_mean_i - true_i)^2)) across units, one value per run.
+    Distribution over replicate seeds shown as a boxplot per sampler per parameter.
+    """
+    df = load_recovery("beta") if df is None else df
+    sub = _apply_filters(df, {"n_chains": n_chains, "k_true": k_true}).copy()
+    if sub.empty:
+        raise ValueError(f"No beta_recovery rows for n_chains={n_chains}, k_true={k_true}.")
+    sampler_order = [s for s in SAMPLER_ORDER if s in set(sub["sampler"])]
+    sub["sampler"] = pd.Categorical(sub["sampler"], categories=sampler_order, ordered=True)
+    n_comp = f"{k_true} True Component" + ("s" if k_true != 1 else "")
+    counts = sub.groupby("sampler", observed=True)["data_seed"].nunique().to_dict()
+    print(f"[beta_rmse_by_param] n_chains={n_chains} k_true={k_true}: seeds/sampler={counts}")
+    return _beta_boxplot(sub, "rmse", "RMSE",
+                         f"Beta RMSE by Parameter - {n_comp}", sampler_order, jitter=jitter)
+
+
+def beta_correlation_by_param(n_chains: int = 2, k_true: int = 1,
+                              corr_df=None, *, jitter: bool = True) -> ggplot:
+    """Pearson correlation between posterior mean and true beta_i across 330 units, per parameter.
+
+    Each point is one seed: corr_i(post_mean_i, true_value_i) over the 330 decision units.
+    Values near 1 mean the sampler correctly ranks individuals by their true preferences.
+    Faceted by parameter (Alt1/Alt2/Alt3/Price) in a single row of 4 panels.
+    """
+    if corr_df is None:
+        print(f"[beta_correlation_by_param] loading beta_summary to compute correlations ...")
+        corr_df = compute_beta_correlation()
+    sub = _apply_filters(corr_df, {"n_chains": n_chains, "k_true": k_true}).copy()
+    if sub.empty:
+        raise ValueError(f"No beta correlation rows for n_chains={n_chains}, k_true={k_true}.")
+    sampler_order = [s for s in SAMPLER_ORDER if s in set(sub["sampler"])]
+    sub["sampler"] = pd.Categorical(sub["sampler"], categories=sampler_order, ordered=True)
+    n_comp = f"{k_true} True Component" + ("s" if k_true != 1 else "")
+    counts = sub.groupby("sampler", observed=True)["data_seed"].nunique().to_dict()
+    print(f"[beta_correlation_by_param] n_chains={n_chains} k_true={k_true}: seeds/sampler={counts}")
+    return _beta_boxplot(sub, "correlation", "Pearson Correlation (post_mean vs true)",
+                         f"Beta Correlation by Parameter - {n_comp}", sampler_order, jitter=jitter)
+
+
+def beta_correlation_by_ktrue(n_chains: int = 2, corr_df=None) -> ggplot:
+    """Beta correlation across all true component counts in one figure.
+
+    x-axis = k_true, boxplots dodged by sampler, faceted by parameter.
+    Shows whether individual ranking degrades as the model becomes more overspecified.
+    Jitter is omitted here because 3 samplers x 4 k_true groups per panel is too crowded.
+    """
+    if corr_df is None:
+        print("[beta_correlation_by_ktrue] loading beta_summary to compute correlations ...")
+        corr_df = compute_beta_correlation()
+    df = corr_df[corr_df["n_chains"] == n_chains].copy()
+    if df.empty:
+        raise ValueError(f"No beta correlation rows for n_chains={n_chains}.")
+    sampler_order = [s for s in SAMPLER_ORDER if s in set(df["sampler"])]
+    param_order = [p for p in _PARAM_ORDER if p in set(df["param"])]
+    ktrue_order = [str(k) for k in sorted(df["k_true"].unique())]
+    df["sampler"] = pd.Categorical(df["sampler"], categories=sampler_order, ordered=True)
+    df["param"] = pd.Categorical(df["param"], categories=param_order, ordered=True)
+    df["k_true"] = pd.Categorical(df["k_true"].astype(str), categories=ktrue_order, ordered=True)
+    color_vals = [SAMPLER_COLORS[s] for s in sampler_order]
+
+    dodge = position_dodge(width=0.9)
+    p = (
+        ggplot(df, aes(x="k_true", y="correlation", color="sampler"))
+        + geom_boxplot(width=0.28, fill="#FFFFFF00", outlier_alpha=0, position=dodge)
+        + facet_wrap("param", ncol=4, scales="free_y", labeller="label_value")
+        + scale_color_manual(values=color_vals,
+                             labels=[SAMPLER_LABELS.get(s, s) for s in sampler_order])
+        + scale_x_discrete(expand=(0, 0.4))
+        + labs(x="True Components (k_true)", y="Pearson Correlation", color="Sampler",
+               title=f"Beta Correlation (post_mean vs true) by True Components (c{n_chains})")
+        + theme_bw()
+        + theme(figure_size=(12, 5), axis_text_x=element_text(size=9),
+                plot_title=element_text(size=11))
+    )
+    return p
+
+
+def beta_coverage_by_param(n_chains: int = 2, k_true: int = 1, df=None) -> ggplot:
+    """Empirical 95% CI coverage of individual beta_i posteriors, per parameter.
+
+    coverage95 = fraction of 330 units whose true beta_i falls inside the posterior 95% CI,
+    averaged over replicate seeds. Dashed reference line at 95%.
+    """
+    df = load_recovery("beta") if df is None else df
+    sub = _apply_filters(df, {"n_chains": n_chains, "k_true": k_true}).copy()
+    if sub.empty:
+        raise ValueError(f"No beta_recovery rows for n_chains={n_chains}, k_true={k_true}.")
+
+    cov = (
+        sub.groupby(["param", "sampler"], observed=True)["coverage95"]
+        .mean().mul(100).reset_index()
+        .rename(columns={"coverage95": "coverage_pct"})
+    )
+    sampler_order = [s for s in SAMPLER_ORDER if s in set(cov["sampler"])]
+    param_order = [p for p in _PARAM_ORDER if p in set(cov["param"])]
+    cov["sampler"] = pd.Categorical(cov["sampler"], categories=sampler_order, ordered=True)
+    cov["param"] = pd.Categorical(cov["param"], categories=param_order, ordered=True)
+    fill_vals = [SAMPLER_COLORS[s] for s in sampler_order]
+    n_comp = f"{k_true} True Component" + ("s" if k_true != 1 else "")
+
+    p = (
+        ggplot(cov, aes(x="sampler", y="coverage_pct", fill="sampler"))
+        + geom_col(width=0.6)
+        + geom_hline(yintercept=95, linetype="dashed", color="#555555", size=0.8)
+        + facet_wrap("param", ncol=4, labeller="label_value")
+        + scale_fill_manual(values=fill_vals,
+                            labels=[SAMPLER_LABELS.get(s, s) for s in sampler_order])
+        + scale_x_discrete(labels=[SAMPLER_LABELS.get(s, s) for s in sampler_order])
+        + scale_y_continuous(breaks=[80, 85, 90, 95, 100])
+        + coord_cartesian(ylim=(80, 100))
+        + labs(x="Sampler", y="Coverage (%)", fill="Sampler",
+               title=f"Empirical 95% CI Coverage of Beta - {n_comp}")
+        + theme_bw()
+        + theme(figure_size=(12, 5), axis_text_x=element_text(size=8),
+                plot_title=element_text(size=11))
+    )
+    return p
+
+
+def beta_coverage_by_ktrue(n_chains: int = 2, df=None) -> ggplot:
+    """Beta 95% CI coverage across true component counts.
+
+    x-axis = k_true, bars dodged by sampler, faceted by parameter.
+    Shows whether individual-level beta coverage degrades with overspecification.
+    """
+    df = load_recovery("beta") if df is None else df
+    df = df[df["n_chains"] == n_chains].copy()
+    if df.empty:
+        raise ValueError(f"No beta_recovery rows for n_chains={n_chains}.")
+
+    cov = (
+        df.groupby(["param", "sampler", "k_true"], observed=True)["coverage95"]
+        .mean().mul(100).reset_index()
+        .rename(columns={"coverage95": "coverage_pct"})
+    )
+    sampler_order = [s for s in SAMPLER_ORDER if s in set(cov["sampler"])]
+    param_order = [p for p in _PARAM_ORDER if p in set(cov["param"])]
+    ktrue_order = [str(k) for k in sorted(cov["k_true"].unique())]
+    cov["sampler"] = pd.Categorical(cov["sampler"], categories=sampler_order, ordered=True)
+    cov["param"] = pd.Categorical(cov["param"], categories=param_order, ordered=True)
+    cov["k_true"] = pd.Categorical(cov["k_true"].astype(str), categories=ktrue_order, ordered=True)
+    fill_vals = [SAMPLER_COLORS[s] for s in sampler_order]
+
+    p = (
+        ggplot(cov, aes(x="k_true", y="coverage_pct", fill="sampler"))
+        + geom_col(position="dodge", width=0.7)
+        + geom_hline(yintercept=95, linetype="dashed", color="#555555", size=0.8)
+        + facet_wrap("param", ncol=4, labeller="label_value")
+        + scale_fill_manual(values=fill_vals,
+                            labels=[SAMPLER_LABELS.get(s, s) for s in sampler_order])
+        + scale_y_continuous(breaks=[80, 85, 90, 95, 100])
+        + coord_cartesian(ylim=(80, 100))
+        + labs(x="True Components (k_true)", y="Coverage (%)", fill="Sampler",
+               title=f"Empirical 95% CI Coverage of Beta by True Components (c{n_chains})")
+        + theme_bw()
+        + theme(figure_size=(12, 5), axis_text_x=element_text(size=9),
+                plot_title=element_text(size=11))
+    )
+    return p
+
+
+def marginal_distance_by_ktrue(n_chains: int = 2, metric: str = "Hellinger",
+                               df=None) -> ggplot:
+    """Distance between fitted marginal density and true DGP marginal, by true component count.
+
+    x-axis = k_true, boxplots dodged by sampler, faceted by parameter (4 panels).
+    Each box pools ~100 replicate seeds; each data point is one fit.
+    The `metric` argument selects which distance to plot; see MARGINAL_METRICS for options.
+    Hellinger is the primary metric (bounded in [0,1] and symmetric); KL/JSD/TVD/Wasserstein1
+    are supplementary.
+    """
+    df = load_recovery("marginal_distances") if df is None else df
+    sub = df[df["n_chains"] == n_chains].copy()
+    if sub.empty:
+        raise ValueError(f"No marginal_distances rows for n_chains={n_chains}.")
+    if metric not in sub.columns:
+        raise ValueError(f"Metric '{metric}' not in marginal_distances columns. "
+                         f"Available: {[c for c in MARGINAL_METRICS if c in sub.columns]}")
+
+    sampler_order = [s for s in SAMPLER_ORDER if s in set(sub["sampler"])]
+    param_order = [p for p in _PARAM_ORDER if p in set(sub["param"])]
+    ktrue_order = [str(k) for k in sorted(sub["k_true"].unique())]
+    sub["sampler"] = pd.Categorical(sub["sampler"], categories=sampler_order, ordered=True)
+    sub["param"] = pd.Categorical(sub["param"], categories=param_order, ordered=True)
+    sub["k_true"] = pd.Categorical(sub["k_true"].astype(str), categories=ktrue_order, ordered=True)
+
+    counts = sub.groupby(["sampler", "k_true"], observed=True)["data_seed"].nunique().to_dict()
+    print(f"[marginal_distance_by_ktrue] {metric} c{n_chains}: seeds/box={counts}")
+
+    color_vals = [SAMPLER_COLORS[s] for s in sampler_order]
+    dodge = position_dodge(width=0.9)
+    ylabel = MARGINAL_METRIC_LABELS.get(metric, metric)
+
+    p = (
+        ggplot(sub, aes(x="k_true", y=metric, color="sampler"))
+        + geom_boxplot(width=0.28, fill="#FFFFFF00", outlier_alpha=0.3, position=dodge)
+        + facet_wrap("param", ncol=4, scales="free_y", labeller="label_value")
+        + scale_color_manual(values=color_vals,
+                             labels=[SAMPLER_LABELS.get(s, s) for s in sampler_order])
+        + scale_x_discrete(expand=(0, 0.4))
+        + labs(x="True Components (k_true)", y=ylabel, color="Sampler",
+               title=f"{ylabel} by True Components (c{n_chains})")
+        + theme_bw()
+        + theme(figure_size=(12, 5), axis_text_x=element_text(size=9),
+                plot_title=element_text(size=11))
+    )
+    return p
+
+
+def marginal_distances_faceted_by_metric(n_chains: int = 2, k_true: int = 1,
+                                          df=None) -> ggplot:
+    """All five distance metrics in one figure for a single k_true value.
+
+    x-axis = sampler, faceted by metric (5 rows) and param (4 cols).
+    Useful for a quick side-by-side sanity check that the metrics agree on ordering.
+    """
+    df = load_recovery("marginal_distances") if df is None else df
+    sub = df[(df["n_chains"] == n_chains) & (df["k_true"] == k_true)].copy()
+    if sub.empty:
+        raise ValueError(f"No marginal_distances rows for n_chains={n_chains}, k_true={k_true}.")
+
+    # Melt to long format: one row per (run, param, metric).
+    id_cols = ["dataset_key", "scenario", "k_true", "data_seed", "k_model", "sampler", "n_chains", "param"]
+    id_cols = [c for c in id_cols if c in sub.columns]
+    metrics_present = [m for m in MARGINAL_METRICS if m in sub.columns]
+    long = sub.melt(id_vars=id_cols, value_vars=metrics_present,
+                    var_name="metric", value_name="distance")
+
+    sampler_order = [s for s in SAMPLER_ORDER if s in set(long["sampler"])]
+    param_order = [p for p in _PARAM_ORDER if p in set(long["param"])]
+    long["sampler"] = pd.Categorical(long["sampler"], categories=sampler_order, ordered=True)
+    long["param"] = pd.Categorical(long["param"], categories=param_order, ordered=True)
+    long["metric"] = pd.Categorical(long["metric"], categories=metrics_present, ordered=True)
+
+    color_vals = [SAMPLER_COLORS[s] for s in sampler_order]
+    n_comp = f"{k_true} True Component" + ("s" if k_true != 1 else "")
+
+    p = (
+        ggplot(long, aes(x="sampler", y="distance", color="sampler"))
+        + geom_boxplot(fill="#FFFFFF00", outlier_alpha=0.3)
+        + facet_grid(rows="metric", cols="param", scales="free_y")
+        + scale_color_manual(values=color_vals,
+                             labels=[SAMPLER_LABELS.get(s, s) for s in sampler_order])
+        + scale_x_discrete(labels=[SAMPLER_LABELS.get(s, s) for s in sampler_order])
+        + labs(x="Sampler", y="Distance", color="Sampler",
+               title=f"Marginal Distances vs True DGP - {n_comp}")
+        + theme_bw()
+        + theme(figure_size=(14, 12), axis_text_x=element_text(size=7),
+                plot_title=element_text(size=11))
     )
     return p
 
