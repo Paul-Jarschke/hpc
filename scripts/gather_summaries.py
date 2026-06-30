@@ -5,9 +5,10 @@ Each run writes tidy per-run tables to jobs/<job>/out/<table>/<run_key>.csv (see
 src/summaries.py, called from every run.qmd). This concatenates them across all jobs into
 data/out/k5model_mixture/<table>.csv, one file per table, ready for analysis/plotting.
 
-It replaces the heavy analysis/post_process.py for everything EXCEPT the cross-sampler
-marginal tables (marginal_distances / marginal_diagnostics), which need raw chains from
-several samplers together and so are produced by post_process.py on the Tier-2 subset.
+It replaces the heavy analysis/post_process.py: every per-run table - including the
+marginal distances (each fit vs the true DGP) and the marginal-density ESS/R-hat - is now
+written on-node by src.summaries, so this concatenation produces the full set, no posteriors
+needed. (post_process.py only re-derives the same tables from saved posteriors as a fallback.)
 
 Run locally after downloading the summary CSVs (download_all.py):
     .venv/Scripts/python.exe scripts/gather_summaries.py            # real out/
@@ -45,8 +46,7 @@ def main(testing):
         df.to_csv(outdir / f"{table}.csv", index=False)
         total += len(files)
         print(f"  {table:16s}: {len(files):4d} run-files -> {df.shape[0]:7d} rows")
-    print(f"\n-> {outdir}   (marginal_distances / marginal_diagnostics come from "
-          f"post_process.py on the Tier-2 posterior subset)")
+    print(f"\n-> {outdir}")
     if total == 0:
         print("NOTE: found no per-run summary CSVs - have the runs been rendered + downloaded?")
 
