@@ -32,9 +32,9 @@ COND_KEYS = ("dataset_key", "scenario", "k_true", "data_seed", "k_model", "sampl
 
 # The full set of per-run table names per_run_tables() returns, in output order. (The
 # cross-sampler marginal tables are NOT here - they need several runs together.)
-TABLE_NAMES = ("runs", "ecr_report", "weights", "convergence", "moments",
+TABLE_NAMES = ("runs", "ecr_report", "weights", "pvec_means", "convergence", "moments",
                "mu_recovery", "sigma_recovery", "delta_recovery", "beta_recovery",
-               "beta_summary", "diagnostics")
+               "beta_summary", "diagnostics", "marginal_distances", "marginal_diagnostics")
 
 
 # --------------------------------------------------------------------------- #
@@ -277,6 +277,14 @@ def per_run_tables(post, meta, truth, diag=None):
                       "in_ci": (bool(lo <= tw <= hi) if slot < K_true else np.nan)})
     tables["weights"] = wrows
 
+    # pvec mean weights per component, BEFORE and AFTER relabeling (each ranked by descending
+    # mean weight) - logged for every run so the weight distribution can be studied across seeds.
+    pmrows = []
+    for _, r in ls.pvec_mean_table(post, relabeled, K).iterrows():
+        pmrows.append({**cond, "stage": r["stage"], "rank": int(r["rank"]),
+                       "pvec_mean": float(r["pvec_mean"])})
+    tables["pvec_means"] = pmrows
+
     # convergence: label-invariant gate + per-component (raw) + per-component AFTER relabel
     # (ESS should recover for the live slots - the signal that justifies ECR).
     crows = []
@@ -310,5 +318,25 @@ def per_run_tables(post, meta, truth, diag=None):
 
     # sampler diagnostics (per kernel/block); empty for samplers without transition infos.
     tables["diagnostics"] = diagnostics_rows(diag, cond)
+
+    # marginal-density comparison vs the TRUE DGP marginal (Rossi Eq. 5.5.19), on THIS run's
+    # own fitted-component support. Single-model grid -> fully run-independent (needs no sibling
+    # samplers), so every run logs it on-node. Distances per parameter: Hellinger,
+    # KL(model||true), JSD, TVD, Wasserstein-1.
+    grids = mc.build_grids([model], K_true=K_true)
+    true_model = mc.true_dgp_model(truth)
+    mdist = []
+    for (_, param), r in mc.distance_table([model], true_model, grids, param_names).iterrows():
+        mdist.append({**cond, "param": param, **r.to_dict()})
+    tables["marginal_distances"] = mdist
+
+    # label-invariant ESS / R-hat at the level of the marginal density series (Eq. 5.5.19) and
+    # the mixture-moment series (Eq. 5.5.2), computed on the real (chains, draws) via arviz.
+    mdiag = []
+    for param, r in mc.density_series_diagnostics(model, grids, param_names).iterrows():
+        mdiag.append({**cond, "param": param, "kind": "density", **r.to_dict()})
+    for (param, moment), r in mc.moment_series_diagnostics(model, param_names).iterrows():
+        mdiag.append({**cond, "param": param, "kind": f"moment_{moment}", **r.to_dict()})
+    tables["marginal_diagnostics"] = mdiag
 
     return tables, model
