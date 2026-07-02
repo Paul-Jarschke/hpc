@@ -33,6 +33,8 @@ from plot_recovery import (  # noqa: E402
     runtime_by_ktrue,
     runtime_samplers_by_ktrue,
 )
+import component_count  # noqa: E402
+import marginal_diag  # noqa: E402
 
 CHAINS = 2
 KTRUE = [1, 2, 3, 5]
@@ -105,6 +107,14 @@ def main():
                  f"marginal_comparison/plots/all_metrics_c{CHAINS}_kt{kt}.png")
         except ValueError as e:
             print(f"  skip all_metrics_kt{kt}: {e}")
+
+    # Component-count: effective-K boxplot, est_k confusion by k_true, and the sorted
+    # weight profiles (after-ECR + before/after) under components/.
+    component_count.make_plots(CHAINS)
+
+    # Marginal-series convergence: ESS/R-hat grids (density x mean x variance) + density-only
+    # figures, under marginal_comparison/.
+    marginal_diag.make_plots(CHAINS)
 
     print("regenerated all figures -> analysis/out/k5_results/")
 

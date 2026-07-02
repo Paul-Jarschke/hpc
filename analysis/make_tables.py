@@ -20,6 +20,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from plot_recovery import (  # noqa: E402
     load_recovery, DIR_FIG, delta_element_label, compute_beta_correlation, MARGINAL_METRICS,
 )
+import component_count  # noqa: E402
+import marginal_diag  # noqa: E402
 
 OUT_DIR_DELTA_BIAS     = DIR_FIG / "delta" / "bias"     / "tables"
 OUT_DIR_DELTA_SD       = DIR_FIG / "delta" / "sd"       / "tables"
@@ -506,6 +508,12 @@ def main():
         path = OUT_DIR_BETA_COVERAGE / f"beta_coverage_c{CHAINS}_kt{int(kt)}.csv"
         sub.to_csv(path, index=False)
         print(f"wrote {len(sub)} rows -> {path}")
+
+    # --- Component-count tables (recovery summary, confusion, threshold sensitivity) ---
+    component_count.write_tables(CHAINS)
+
+    # --- Marginal-series convergence tables (R-hat + ESS summaries) ---
+    marginal_diag.write_tables(CHAINS)
 
     # --- Marginal distance summary tables ---
     OUT_DIR_MARGINAL.mkdir(parents=True, exist_ok=True)

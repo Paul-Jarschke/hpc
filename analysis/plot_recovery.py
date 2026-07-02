@@ -114,6 +114,9 @@ RECOVERY_FILES = {
     "ecr": "ecr_report.csv",
     "diagnostics": "diagnostics.csv",
     "marginal_distances": "marginal_distances.csv",
+    "marginal_diagnostics": "marginal_diagnostics.csv",
+    "weights": "weights.csv",
+    "pvec_means": "pvec_means.csv",
 }
 
 MARGINAL_METRICS = ["Hellinger", "KL", "JSD", "TVD", "Wasserstein1"]
