@@ -2,7 +2,7 @@ library(tidyverse)
 
 # Number of replicate seeds per scenario to include (data_seed in 1..MAX_DATA_SEED).
 # 100 = the full grid (4 scenarios x 100 fittable seeds = 400 rows).
-MAX_DATA_SEED <- 5
+MAX_DATA_SEED <- 100
 
 # ..............................................................................
 # Build params.csv for ONE sampler slice of the 2-chain mixture experiment
