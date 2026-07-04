@@ -1,65 +1,71 @@
 """
-Bayesian Hierarchical Multinomial Logit (HBMNL) with a
-mixture-of-normals heterogeneity distribution.
- 
-The number of mixture components fitted by the model (K_MODEL) is supplied
-explicitly by the caller and is INDEPENDENT of the number of components in
-the data-generating process (K_TRUE). This module never reads "K" from
-data_dict — that key is a property of the data, not a modelling decision.
- 
-Prior structure matches bayesm::rhierMnlRwMixture:
- 
-    beta_i = Z[i] @ Delta + u_i,   u_i ~ N(mu_k, Sigma_k),  k ~ Categorical(pvec)
- 
+Bayesian Hierarchical Multinomial Logit (HBMNL) with a mixture-of-normals
+heterogeneity distribution — AUGMENTED parameterisation matching bayesm.
+
+This is the model exactly as bayesm::rhierMnlRwMixture samples it: the
+component allocation ind_i is an EXPLICIT latent variable (Rossi 2006,
+Eq. 5.5.4 DAG), instead of being marginalised out via MixtureSameFamily as
+in src.mixturemodel.build_mixture_hbmnl_model:
+
+    ind_i  ~ Categorical(pvec)
+    beta_i = Z[i] @ Delta + u_i,   u_i | ind_i ~ N(mu_{ind_i}, Sigma_{ind_i})
+
+Marginally over ind the posterior of (pvec, mu_k, Sigma_k, Delta, beta_i) is
+IDENTICAL to the marginalised model, so results are directly comparable.
+The explicit allocations exist so that the conjugate data-augmentation Gibbs
+sweep of bayesm (Rossi Eq. 5.5.7 / 5.5.9-5.5.18) can be run on the model via
+src.inference.bayesm_gibbs.run_bayesm_gibbs_inference_mixture_hbmnl — and so
+that allocation draws are available for label.switching post-processing.
+
+Prior structure (identical to the marginalised builder and to bayesm defaults):
+
     Wishart:   Sigma_k^{-1} ~ W(nu, V^{-1}),  nu = n_params + 3,  V = nu * I
     Normal:    mu_k | Sigma_k ~ N(0, Sigma_k / a_mu)
     Normal:    Delta          ~ N(0, (1/A_delta) * I)
     Dirichlet: pvec           ~ Dir(dirichlet_a)
+
+NOTE: ind is a discrete parameter. It can only be updated by a Gibbs kernel —
+gradient-based kernels (NUTS/HMC/IWLS) must never own the "ind" position key.
 """
- 
+
+import numpy as np
 import jax.numpy as jnp
- 
+
 import liesel.model as lsl
 import tensorflow_probability.substrates.jax.distributions as tfd
 import tensorflow_probability.substrates.jax.bijectors as tfb
-from tensorflow_probability.substrates.jax.experimental import distributions as tfde
-from tensorflow_probability.python.internal.backend.jax.compat import v2 as tf
+
+from src.mixturemodel import _make_mvn_precision, _make_wishart
 
 
-# --------------------------------------------------------------------------- #
-# Helper distributions
-# --------------------------------------------------------------------------- #
-def _make_wishart(df: jnp.ndarray, scale_tril: jnp.ndarray):
-    """Wishart distribution parameterised by its Cholesky factor."""
-    return tfd.WishartTriL(
-        df=df,
-        scale_tril=scale_tril,
-        input_output_cholesky=True,
-        validate_args=False,
+def bayesm_initial_indicators(n_units: int, K: int) -> np.ndarray:
+    """
+    bayesm's initial allocation: (K-1) equal blocks of floor(n/K) units,
+    remainder assigned to the last component (rhierMnlRwMixture.R).
+    """
+    if K == 1:
+        return np.zeros(n_units, dtype=np.int32)
+    ninc = n_units // K
+    ind0 = np.concatenate(
+        [np.full(ninc, k, dtype=np.int32) for k in range(K - 1)]
+        + [np.full(n_units - ninc * (K - 1), K - 1, dtype=np.int32)]
     )
- 
- 
-def _make_mvn_precision(loc: jnp.ndarray, precision_factor: jnp.ndarray):
-    """Multivariate Normal parameterised by its precision (Cholesky) factor."""
-    return tfde.MultivariateNormalPrecisionFactorLinearOperator(
-        loc=loc,
-        precision_factor=tf.linalg.LinearOperatorLowerTriangular(precision_factor),
-        validate_args=False,
-    )
+    return ind0
 
 
 # --------------------------------------------------------------------------- #
 # Main model builder
 # --------------------------------------------------------------------------- #
-def build_mixture_hbmnl_model(
+def build_bayesm_mixture_hbmnl_model(
         data_dict: dict,
         K: int,                      # ── REQUIRED: number of model components (K_MODEL)
         A_delta: float = 0.01,
         a_mu: float = 0.01,
         dirichlet_a: float = 1.0):
     """
-    Build a K-component mixture HBMNL Liesel model.
- 
+    Build a K-component mixture HBMNL Liesel model with EXPLICIT allocations
+    (bayesm-augmented parameterisation).
+
     Parameters
     ----------
     data_dict   : dict with 'X', 'y', 'unit_idx', 'n_params', 'n_units' and
@@ -71,23 +77,27 @@ def build_mixture_hbmnl_model(
     a_mu        : prior precision scaling for the mixture component means.
     dirichlet_a : Dirichlet concentration on pvec. < 1.0 encourages sparse
                   weights (spurious components collapse toward 0), useful when
-                  K_MODEL > K_TRUE; == 1.0 is uniform; > 1.0 pulls toward equal.
- 
+                  K_MODEL > K_TRUE; == 1.0 is uniform (uninformative on the
+                  simplex - does not assume overspecification); > 1.0 pulls
+                  toward equal weights.
+
     Returns
     -------
-    A compiled liesel.model.Model.
+    A compiled liesel.model.Model with an extra attribute ``bayesm_prior``
+    holding the hyperparameters, read by the bayesm_gibbs runner so that its
+    conjugate updates are guaranteed to match the model's prior.
     """
     if K is None:
         raise ValueError(
             "K (number of model components) must be supplied explicitly. "
             "It is decoupled from data_dict['K'] by design."
         )
- 
+
     n_params = int(data_dict["n_params"])
     n_units  = int(data_dict["n_units"])
-    K_comp   = int(K)                                   # K_MODEL - never read from data, needs explicit user definition
+    K_comp   = int(K)                                   # K_MODEL - never read from data
     has_Z    = data_dict.get("Z") is not None
- 
+
     # ── Wishart prior ──────────────────────────────────────────────────────
     nu          = float(n_params + 3)
     V           = nu * jnp.eye(n_params)
@@ -135,12 +145,19 @@ def build_mixture_hbmnl_model(
         name="mu_k",
     )
 
+    # ── ind_i ~ Categorical(pvec) — the explicit allocation (Eq. 5.5.4) ────
+    ind = lsl.Var.new_param(
+        value=jnp.asarray(bayesm_initial_indicators(n_units, K_comp)),
+        distribution=lsl.Dist(tfd.Categorical, probs=pvec),
+        name="ind",
+    )
+
     # ── Delta ~ N(0, (1/A_delta) * I) ──────────────────────────────────────
     if has_Z:
         n_demos           = int(data_dict["Z"].shape[1])
         Z_var             = lsl.Var.new_obs(data_dict["Z"], name="Z_obs")
         Delta_prec_factor = jnp.sqrt(A_delta) * jnp.eye(n_params)
- 
+
         Delta = lsl.Var.new_param(
             value=jnp.zeros((n_demos, n_params)),
             distribution=lsl.Dist(
@@ -154,38 +171,31 @@ def build_mixture_hbmnl_model(
             lambda z, d: z @ d, z=Z_var, d=Delta, name="z_delta"
         )
 
-    # ── beta_i location: Z[i] @ Delta + mu_k   (n_units, K, n_params) ───────
+    # ── beta_i | ind_i: unit-specific normal via allocation indexing ───────
     if has_Z:
-        beta_loc = lsl.Var.new_calc(
-            lambda zd, mu: zd[:, None, :] + mu[None, :, :],
-            zd=z_delta, mu=mu_k,
-            name="beta_loc",
+        beta_loc_i = lsl.Var.new_calc(
+            lambda zd, mu, i: zd + mu[i],
+            zd=z_delta, mu=mu_k, i=ind,
+            name="beta_loc_i",
         )
     else:
-        beta_loc = lsl.Var.new_calc(
-            lambda mu: jnp.broadcast_to(mu[None, :, :], (n_units, K_comp, n_params)),
-            mu=mu_k,
-            name="beta_loc",
+        beta_loc_i = lsl.Var.new_calc(
+            lambda mu, i: mu[i],
+            mu=mu_k, i=ind,
+            name="beta_loc_i",
         )
- 
-    def _make_beta_mixture(pvec, locs, precision_factors):
-        return tfd.MixtureSameFamily(
-            mixture_distribution=tfd.Categorical(probs=pvec),
-            components_distribution=tfde.MultivariateNormalPrecisionFactorLinearOperator(
-                loc=locs,
-                precision_factor=tf.linalg.LinearOperatorLowerTriangular(
-                    precision_factors[None]
-                ),
-            ),
-        )
- 
+    beta_prec_factor_i = lsl.Var.new_calc(
+        lambda L, i: L[i],
+        L=sigma_inv_chol_k, i=ind,
+        name="beta_prec_factor_i",
+    )
+
     beta_i = lsl.Var.new_param(
         value=jnp.zeros((n_units, n_params)),
         distribution=lsl.Dist(
-            _make_beta_mixture,
-            pvec=pvec,
-            locs=beta_loc,
-            precision_factors=sigma_inv_chol_k,
+            _make_mvn_precision,
+            loc=beta_loc_i,
+            precision_factor=beta_prec_factor_i,
         ),
         name="beta_i",
     )
@@ -209,17 +219,12 @@ def build_mixture_hbmnl_model(
 
     model = lsl.Model([y_var])
 
-    # Hyperparameters travel with the model so src.inference.init's
-    # data-informed initial-value construction (Rossi/bayesm's own scheme)
-    # can read the SAME (nu, V, a_mu) this model was actually built with,
-    # rather than requiring them to be threaded separately and risking drift.
-    # Distinct attribute name from build_bayesm_mixture_hbmnl_model's
-    # "bayesm_prior" so the two model types remain distinguishable by
-    # attribute presence (bayesm_gibbs.py relies on this).
-    model.prior_hparams = {
+    # Hyperparameters travel with the model so the Gibbs runner's conjugate
+    # updates provably match the prior actually built here.
+    model.bayesm_prior = {
         "K": K_comp,
         "nu": nu,
-        "V": V,
+        "V": np.asarray(V),
         "a_mu": float(a_mu),
         "A_delta": float(A_delta),
         "dirichlet_a": float(dirichlet_a),

@@ -12,14 +12,27 @@ moments, sampler diagnostics) is built here, so the SAME code runs two ways:
     several samplers' chains together).
 
 This is the `summaries.py` referenced in src/README.md. The recovery math is unchanged
-from the original post_process.py; it reuses analysis.* (label-invariant convergence,
-Delta/beta element summaries), label_switching.* (ECR.iterative.1 relabel + component
-convergence) and marginal_comparison.* (Rossi mixture moments). per_run_tables() returns
-the per-run tables plus the in-memory mixture `model` dict so the caller can run the
-cross-sampler step without rebuilding it.
+from the original post_process.py; it reuses analysis.* (label-invariant convergence),
+label_switching.* (ECR.iterative.1 relabel + component convergence) and
+marginal_comparison.* (Rossi mixture moments). per_run_tables() returns the per-run
+tables plus the in-memory mixture `model` dict so the caller can run the cross-sampler
+step without rebuilding it.
+
+The marginal-density tables are computed on the TWO grid scenarios of the study's
+full_marginal_comparison notebook (upstream @ 893e63f): "full" (build_grids_full,
+raw mu +/- 6 sigma envelope over every component incl. surplus ones) and "chebyshev"
+(build_grids_chebyshev, aggregate mixture-moment mean +/- 5 sigma window, >= 96% of
+each model's own marginal mass by Chebyshev's inequality). Every distance /
+density-diagnostic row carries a `grid` column naming its scenario.
+
+delta_summary_rows / beta_summary_rows / pvec_mean_table live HERE (harness glue):
+they were part of the previously vendored analysis.py / label_switching.py but were
+removed upstream; the vendored modules stay byte-identical to upstream, so the tidy
+per-element tables they produced are kept as local functions instead.
 """
 
 import numpy as np
+import pandas as pd
 from scipy.optimize import linear_sum_assignment
 
 from . import analysis
@@ -55,6 +68,96 @@ def _match_components(post_mu_mean, true_mu, K_true):
     cost = np.sum((post_mu_mean[:, None, :] - true_mu[None, :K_true, :]) ** 2, axis=-1)  # (K,K_true)
     row, col = linear_sum_assignment(cost)
     return {int(r): int(c) for r, c in zip(row, col)}
+
+
+# --------------------------------------------------------------------------- #
+# Glue kept from the previously vendored modules (removed upstream; see module
+# docstring). Bodies are unchanged from the pre-893e63f vendored versions.
+# --------------------------------------------------------------------------- #
+def delta_summary_rows(delta_draws, true_delta, demo_names, param_names,
+                       cond=None, ci=(2.5, 97.5)):
+    """Tidy per-element posterior summary of the demographic shift matrix Delta.
+
+    One row per Delta element (demo d, param p): posterior mean/std, credible-interval
+    bounds (default 95%) and the ground-truth TRUE_DELTA value. Numeric, file-friendly
+    form of the notebook's generate_delta_summaries / plot_delta_distributions.
+    bias = post_mean - true_value is SIGNED (positive = overestimate)."""
+    if delta_draws is None:
+        return []
+    Delta = np.asarray(delta_draws)
+    if Delta.ndim < 2:
+        return []
+    D, P = Delta.shape[-2], Delta.shape[-1]
+    if D == 0:
+        return []
+    flat = Delta.reshape(-1, D, P)
+    lo_q, hi_q = ci
+    cond = dict(cond or {})
+    td = None if true_delta is None else np.asarray(true_delta, dtype=float)
+    if demo_names is None:
+        demo_names = [f"demo{d}" for d in range(D)]
+    rows = []
+    for dd in range(D):
+        for p in range(P):
+            draws = flat[:, dd, p]
+            lo, hi = np.percentile(draws, [lo_q, hi_q])
+            mean = float(draws.mean())
+            tv = float(td[dd, p]) if td is not None else float("nan")
+            rows.append({**cond, "demo": demo_names[dd], "param": param_names[p],
+                         "post_mean": mean, "post_std": float(draws.std()),
+                         "ci_low": float(lo), "ci_high": float(hi), "true_value": tv,
+                         "bias": ((mean - tv) if td is not None else float("nan")),
+                         "in_ci": (bool(lo <= tv <= hi) if td is not None else None)})
+    return rows
+
+
+def beta_summary_rows(beta_draws, true_beta, param_names, cond=None, ci=(2.5, 97.5)):
+    """Tidy per-element posterior summary of the unit-level coefficients beta_i.
+
+    One row per (unit i, param p): posterior mean/std, CI bounds, TRUE_BETA value and
+    signed bias. beta_i is individually identified and unaffected by component label
+    switching, so no ECR relabeling is needed. N * P rows per run (e.g. 300 * 4)."""
+    if beta_draws is None:
+        return []
+    beta = np.asarray(beta_draws)
+    if beta.ndim < 2:
+        return []
+    N, P = beta.shape[-2], beta.shape[-1]
+    flat = beta.reshape(-1, N, P)
+    mean = flat.mean(axis=0)                              # (N,P)
+    std = flat.std(axis=0)                                # (N,P)
+    lo, hi = np.percentile(flat, list(ci), axis=0)        # (N,P) each
+    cond = dict(cond or {})
+    tb = None if true_beta is None else np.asarray(true_beta, dtype=float)
+    rows = []
+    for i in range(N):
+        for p in range(P):
+            m = float(mean[i, p])
+            tv = float(tb[i, p]) if tb is not None else float("nan")
+            rows.append({**cond, "unit": i, "param": param_names[p],
+                         "post_mean": m, "post_std": float(std[i, p]),
+                         "ci_low": float(lo[i, p]), "ci_high": float(hi[i, p]),
+                         "true_value": tv,
+                         "bias": ((m - tv) if tb is not None else float("nan")),
+                         "in_ci": (bool(lo[i, p] <= tv <= hi[i, p]) if tb is not None else None)})
+    return rows
+
+
+def pvec_mean_table(posterior_samples, relabeled, K):
+    """Mean component weight per slot, BEFORE and AFTER ECR relabeling.
+
+    Each stage is ranked INDEPENDENTLY by descending mean weight - read BY RANK within
+    a stage, NOT row-to-row across stages (before relabeling the raw labels have no
+    stable identity; that IS label switching)."""
+    stages = [("before", np.asarray(analysis._recover_pvec(posterior_samples))),
+              ("after",  np.asarray(analysis._recover_pvec(relabeled)))]
+    rows = []
+    for stage, pvec in stages:
+        C, S, _ = pvec.shape
+        means = np.sort(pvec.reshape(C * S, K).mean(axis=0))[::-1]   # descending
+        for rank, m in enumerate(means):
+            rows.append({"stage": stage, "rank": rank, "pvec_mean": float(m)})
+    return pd.DataFrame(rows)
 
 
 # --------------------------------------------------------------------------- #
@@ -118,13 +221,13 @@ def sigma_recovery_rows(relabeled, truth, cond, K, K_true, mapping, param_names)
 
 
 def delta_recovery_rows(post, truth, cond, param_names):
-    """Delta (demographic shift) recovery vs TRUE_DELTA. Delegates to analysis.delta_summary_rows."""
+    """Delta (demographic shift) recovery vs TRUE_DELTA. Delegates to delta_summary_rows."""
     if "Delta" not in post or truth.get("TRUE_DELTA") is None:
         return []
     D = np.asarray(post["Delta"]).shape[-2]                    # (C,S,D,P)
     demo_names = list(truth.get("demo_names", [f"demo{d}" for d in range(D)]))
-    return analysis.delta_summary_rows(post["Delta"], truth["TRUE_DELTA"],
-                                       demo_names, param_names, cond=cond)
+    return delta_summary_rows(post["Delta"], truth["TRUE_DELTA"],
+                              demo_names, param_names, cond=cond)
 
 
 def beta_recovery_rows(post, truth, cond, param_names):
@@ -280,7 +383,7 @@ def per_run_tables(post, meta, truth, diag=None):
     # pvec mean weights per component, BEFORE and AFTER relabeling (each ranked by descending
     # mean weight) - logged for every run so the weight distribution can be studied across seeds.
     pmrows = []
-    for _, r in ls.pvec_mean_table(post, relabeled, K).iterrows():
+    for _, r in pvec_mean_table(post, relabeled, K).iterrows():
         pmrows.append({**cond, "stage": r["stage"], "rank": int(r["rank"]),
                        "pvec_mean": float(r["pvec_mean"])})
     tables["pvec_means"] = pmrows
@@ -313,30 +416,39 @@ def per_run_tables(post, meta, truth, diag=None):
     tables["sigma_recovery"] = sigma_recovery_rows(relabeled, truth, cond, K, K_true, mapping, param_names)
     tables["delta_recovery"] = delta_recovery_rows(post, truth, cond, param_names)
     tables["beta_recovery"] = beta_recovery_rows(post, truth, cond, param_names)
-    tables["beta_summary"] = analysis.beta_summary_rows(
+    tables["beta_summary"] = beta_summary_rows(
         post.get("beta_i"), truth.get("TRUE_BETA"), param_names, cond=cond)
 
     # sampler diagnostics (per kernel/block); empty for samplers without transition infos.
     tables["diagnostics"] = diagnostics_rows(diag, cond)
 
-    # marginal-density comparison vs the TRUE DGP marginal (Rossi Eq. 5.5.19), on THIS run's
-    # own fitted-component support. Single-model grid -> fully run-independent (needs no sibling
-    # samplers), so every run logs it on-node. Distances per parameter: Hellinger,
-    # KL(model||true), JSD, TVD, Wasserstein-1.
-    grids = mc.build_grids([model], K_true=K_true)
+    # marginal-density comparison vs the TRUE DGP marginal (Rossi Eq. 5.5.19), on the SAME
+    # two grid scenarios as the study's full_marginal_comparison notebook: "full" (raw
+    # mu +/- 6 sigma envelope over every component incl. surplus ones) and "chebyshev"
+    # (aggregate mixture-moment mean +/- 5 sigma window, >= 96% of each model's own mass).
+    # Single-model grids -> fully run-independent (needs no sibling samplers), so every run
+    # logs both on-node. Distances per parameter: Hellinger, KL(model||true), JSD, TVD,
+    # Wasserstein-1. The `grid` column names the scenario.
     true_model = mc.true_dgp_model(truth)
-    mdist = []
-    for (_, param), r in mc.distance_table([model], true_model, grids, param_names).iterrows():
-        mdist.append({**cond, "param": param, **r.to_dict()})
+    grid_scenarios = {
+        "full":      mc.build_grids_full([model], true_model, n_grid=1000, n_sigma=6),
+        "chebyshev": mc.build_grids_chebyshev([model], true_model, n_grid=1000, k=5.0),
+    }
+    mdist, mdiag = [], []
+    for grid_name, grids in grid_scenarios.items():
+        for (_, param), r in mc.distance_table([model], true_model, grids, param_names).iterrows():
+            mdist.append({**cond, "grid": grid_name, "param": param, **r.to_dict()})
+        # label-invariant ESS / R-hat of the marginal density series (Eq. 5.5.19) over the
+        # high-density region of this grid, computed on the real (chains, draws) via arviz.
+        for param, r in mc.density_series_diagnostics(model, grids, param_names).iterrows():
+            mdiag.append({**cond, "grid": grid_name, "param": param, "kind": "density",
+                          **r.to_dict()})
     tables["marginal_distances"] = mdist
 
-    # label-invariant ESS / R-hat at the level of the marginal density series (Eq. 5.5.19) and
-    # the mixture-moment series (Eq. 5.5.2), computed on the real (chains, draws) via arviz.
-    mdiag = []
-    for param, r in mc.density_series_diagnostics(model, grids, param_names).iterrows():
-        mdiag.append({**cond, "param": param, "kind": "density", **r.to_dict()})
+    # mixture-moment series (Eq. 5.5.2) diagnostics are grid-independent: one pass.
     for (param, moment), r in mc.moment_series_diagnostics(model, param_names).iterrows():
-        mdiag.append({**cond, "param": param, "kind": f"moment_{moment}", **r.to_dict()})
+        mdiag.append({**cond, "grid": "moments", "param": param, "kind": f"moment_{moment}",
+                      **r.to_dict()})
     tables["marginal_diagnostics"] = mdiag
 
     return tables, model

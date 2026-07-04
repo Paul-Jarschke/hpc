@@ -11,8 +11,8 @@ Why ECR.iterative.1 (of the three ECR variants in label.switching)
 uses the hard allocation matrix z) and `ecr.iterative.2` (pivot-free, uses the
 m x n x K classification-probability array p). For this study, up to K=5:
 
-  * `ecr` is rejected: it needs a pivot allocation, and the project already hit
-    the between-chain pivot-collapse problem.
+  * `ecr` is rejected: its pivot allocation is not robust when independent
+    chains have collapsed to different, incompatible pivots.
   * `ecr.iterative.1` is chosen: pivot-free, and it works on the HARD allocations
     z = argmax_k r_{ik}. Because Liesel marginalizes the allocations, we have to
     RECONSTRUCT responsibilities post-hoc anyway; hard allocations are far more
@@ -44,8 +44,8 @@ Sigma_{tk}); z[t,i] = argmax_k r_{tik}. This is identical for NUTS, HMC and baye
 What is and isn't fixed
 -----------------------
 Relabeling removes PERMUTATION ambiguity (one mode). It cannot remove genuine
-MULTIMODALITY (chains in different partition modes - the established K=5 weight
-finding). The report classifies the outcome honestly. Component-level recovery
+MULTIMODALITY (chains in different partition modes of the mixture weight
+posterior). The report classifies the outcome honestly. Component-level recovery
 is illustrative-only; the load-bearing inference is on the label-invariant
 functionals (analysis.invariant_convergence_summary), which relabeling leaves
 mathematically unchanged.
@@ -134,8 +134,8 @@ def ecr_iterative_1(z, K, pivot=0, maxiter=100):
     essential: from a uniform reference (identity init under balanced switching)
     every assignment is tied and ECR sticks at the degenerate fixed point. Because
     the reference is then iterated to the global mean, the final labeling is robust
-    to the exact pivot (unlike the non-iterative `ecr`, which the pivot-collapse
-    issue in CLAUDE.md rules out).
+    to the exact pivot (unlike the non-iterative `ecr`, whose pivot allocation is
+    not robust across independently-collapsed chains).
 
     Returns tau (C,S,K) raw->ref maps, converged, n_iter, switching_rate.
     """
@@ -272,36 +272,16 @@ def component_convergence_table(posterior_samples, K, K_true=None, label="", all
     for k in slots:
         is_live = int(k) in live_set
         rows.append({"slot": int(k), "live": is_live, "quantity": "pvec",
-                     "rhat": float(az.rhat(analysis._split_chains(pvec[:, :, k]))),
+                     "rhat": float(az.rhat(pvec[:, :, k])),
                      "ess":  float(az.ess(pvec[:, :, k]))})
         for p in range(P):
             rows.append({"slot": int(k), "live": is_live, "quantity": f"mu[{p}]",
-                         "rhat": float(az.rhat(analysis._split_chains(mu[:, :, k, p]))),
+                         "rhat": float(az.rhat(mu[:, :, k, p])),
                          "ess":  float(az.ess(mu[:, :, k, p]))})
     df = pd.DataFrame(rows)
     if label:
         df.insert(0, "stage", label)
     return df
-
-
-def pvec_mean_table(posterior_samples, relabeled, K):
-    """Mean component weight per slot, BEFORE and AFTER ECR relabeling.
-
-    Mirrors the analysis notebook's two pvec convergence tables (pvec_before_tbl /
-    pvec_after_tbl), but keeps only the mean weights and returns ONE tidy long frame
-    so every HPC run can log it as a per-run CSV. Each stage is ranked INDEPENDENTLY
-    by descending mean weight - read BY RANK within a stage, NOT row-to-row across
-    stages (before relabeling the raw labels have no stable identity; that IS label
-    switching). Columns: stage ('before'|'after'), rank (0 = heaviest), pvec_mean."""
-    stages = [("before", np.asarray(analysis._recover_pvec(posterior_samples))),
-              ("after",  np.asarray(analysis._recover_pvec(relabeled)))]
-    rows = []
-    for stage, pvec in stages:
-        C, S, _ = pvec.shape
-        means = np.sort(pvec.reshape(C * S, K).mean(axis=0))[::-1]   # descending
-        for rank, m in enumerate(means):
-            rows.append({"stage": stage, "rank": rank, "pvec_mean": float(m)})
-    return pd.DataFrame(rows)
 
 
 def plot_before_after_traces(before, after, K, title="", true_vals=None, K_true=None, ylim=None):
@@ -362,7 +342,7 @@ def classify_outcome(report, gate_df, rhat_thresh=1.1):
 
     MULTIMODAL : invariant sorted-pvec R-hat is high -> different partition modes;
                  sorting already removed labels, so it is not a label artifact and
-                 relabeling cannot fix it (the established K=5 case).
+                 relabeling cannot fix it.
     PERMUTATION-FIXED : real switching was present and aligned, gate passes.
     NO-OP : almost no switching was present.
     """

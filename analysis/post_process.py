@@ -1,18 +1,24 @@
 """
-Batch post-processing for the k5model_mixture experiment.
+Batch post-processing for the mixture experiments.
 
-Reads every run's saved FULL posterior (jobs/00[4-9]*-k5-*/out[-test]/posterior_raw/*.pkl
-plus its meta.json) and re-derives every per-run tidy table via src.summaries.per_run_tables
-(the SAME code each run writes on-node), writing concatenated CSVs to data/out/k5model_mixture/:
+Reads every run's saved FULL posterior (<JOB_GLOB>/out[-test]/posterior_raw/*.pkl plus its
+meta.json) and re-derives every per-run tidy table via src.summaries.per_run_tables (the
+SAME code each run writes on-node), writing concatenated CSVs to data/out/<out-name>/:
 
   runs, ecr_report, weights, pvec_means, convergence, moments, mu_recovery, sigma_recovery,
   delta_recovery, beta_recovery, beta_summary, diagnostics, marginal_distances,
   marginal_diagnostics
 
-ALL of these (including the marginal distances vs the true DGP and the marginal-density
-ESS/R-hat) are now produced per-run by src.summaries, so this script only concatenates
-what each run already computes on-node - the gathered CSVs are byte-identical to the
-per-run out/<table>/*.csv files.
+ALL of these (including the marginal distances vs the true DGP on BOTH grid scenarios -
+"full" and "chebyshev", see src/summaries.py - and the marginal-density ESS/R-hat) are
+produced per-run by src.summaries, so this script only concatenates what each run already
+computes on-node - the gathered CSVs are byte-identical to the per-run out/<table>/*.csv
+files.
+
+Defaults target the 2-chain jobs 100-103 (updated port @ 893e63f). The older k5 jobs
+004-009 can still be gathered explicitly - but note the re-vendored modules no longer
+half-split 1-chain runs, so c1 rhats gather as NaN:
+    .venv/Scripts/python.exe analysis/post_process.py --glob "jobs/00[4-9]*-k5-*" --out-name k5model_mixture
 
 Run with the project venv from the repo root:
     .venv/Scripts/python.exe analysis/post_process.py             # real runs (out/)
@@ -40,16 +46,18 @@ if str(REPO) not in sys.path:
 
 from src import summaries as smry
 
-EXPERIMENT = "k5model_mixture"
-# 004-007 = liesel (nuts/hmc); 008-009 = bayesm. Widened so the byte-compatible
-# bayesm posterior_raw.pkl is swept by the same pipeline (sampler col distinguishes them).
-JOB_GLOB = "jobs/00[4-9]*-k5-*"
+# Datasets live here regardless of which job family is gathered.
+DATA_IN = "k5model_mixture"
+# 100 = bayesm (R); 101 = bayesm_gibbs replication; 102 = hmc; 103 = nuts. All share the
+# byte-compatible posterior_raw.pkl format (sampler col distinguishes them).
+JOB_GLOB = "jobs/10[0-3]_mixture_*"
+OUT_NAME = "mixture_c2"
 
 
-def discover_runs(testing):
+def discover_runs(testing, job_glob):
     out = "out-test" if testing else "out"
     runs = []
-    for job in sorted(REPO.glob(JOB_GLOB)):
+    for job in sorted(REPO.glob(job_glob)):
         pdir, mdir = job / out / "posterior_raw", job / out / "meta"
         if not pdir.exists():
             continue
@@ -61,7 +69,7 @@ def discover_runs(testing):
 
 
 def load_truth(dataset_key):
-    with open(REPO / "data" / "in" / EXPERIMENT / f"{dataset_key}.json") as f:
+    with open(REPO / "data" / "in" / DATA_IN / f"{dataset_key}.json") as f:
         return json.load(f)
 
 
@@ -80,9 +88,9 @@ def per_run(pkl, meta_f, acc):
     return meta["run_key"], rep["switching_rate"], rep["verdict"]
 
 
-def main(testing):
-    runs = discover_runs(testing)
-    print(f"found {len(runs)} run(s) [{'out-test' if testing else 'out'}]")
+def main(testing, job_glob, out_name):
+    runs = discover_runs(testing, job_glob)
+    print(f"found {len(runs)} run(s) [{'out-test' if testing else 'out'}] for {job_glob}")
     acc = {k: [] for k in smry.TABLE_NAMES}
 
     for pkl, meta_f in runs:
@@ -92,7 +100,7 @@ def main(testing):
         except Exception:
             print(f"  FAIL {pkl.name}\n{traceback.format_exc()}")
 
-    outdir = REPO / "data" / "out" / EXPERIMENT
+    outdir = REPO / "data" / "out" / out_name
     outdir.mkdir(parents=True, exist_ok=True)
     print()
     for name, rows in acc.items():
@@ -103,6 +111,10 @@ def main(testing):
 
 
 if __name__ == "__main__":
-    ap = argparse.ArgumentParser(description="Post-process k5model_mixture runs.")
+    ap = argparse.ArgumentParser(description="Post-process mixture runs.")
     ap.add_argument("--testing", action="store_true", help="use out-test/ instead of out/")
-    main(ap.parse_args().testing)
+    ap.add_argument("--glob", default=JOB_GLOB, help=f"job dir glob (default: {JOB_GLOB})")
+    ap.add_argument("--out-name", default=OUT_NAME,
+                    help=f"subdir of data/out/ for the gathered CSVs (default: {OUT_NAME})")
+    args = ap.parse_args()
+    main(args.testing, args.glob, args.out_name)

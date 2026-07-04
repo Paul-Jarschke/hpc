@@ -14,6 +14,12 @@ Convention used throughout
 Functions that overlay ground truth (summarize_mu_k, plot_pvec_diagnostics,
 summarize_pvec) therefore take an optional `K_true` argument. If it is omitted
 they fall back to assuming K == K_true (the correctly-specified case).
+
+Plain (non-K-indexed) counterparts - summarize_mu, plot_mu_diagnostics,
+plot_cholesky_trace, recover_covariance_matrix - serve the standard
+(single-component) HBMNL model, where posterior arrays have no component axis
+at all. Delta and beta_i diagnostics are already component-axis-free and are
+shared by both models unchanged.
 """
 
 import jax
@@ -63,6 +69,40 @@ def plot_cholesky_traces(samples_dict, n_params, k_idx=0,
     fig.legend(handles, labels, loc="lower center", ncol=n_chains,
                bbox_to_anchor=(0.5, 0.02))
     plt.suptitle(f"Cholesky Factor of Precision Matrix - Component {k_idx + 1}", fontsize=20)
+    plt.tight_layout(rect=[0, 0.05, 1, 0.95])
+    plt.show()
+
+
+def plot_cholesky_trace(samples_dict, n_params,
+                        param_name="sigma_inv_chol_latent", figsize=(15, 12)):
+    """Trace plots of the latent Cholesky entries (single-component model)."""
+    latent_samples = samples_dict[param_name]
+    n_chains, n_draws, n_latent = latent_samples.shape
+
+    fig, axes = plt.subplots(n_params, n_params, figsize=figsize,
+                             sharex=True, sharey=False)
+    if n_params == 1:
+        axes = np.array([[axes]])
+
+    latent_idx = 0
+    for i in range(n_params):
+        for j in range(n_params):
+            ax = axes[i, j]
+            if i >= j and latent_idx < n_latent:
+                for chain in range(n_chains):
+                    ax.plot(latent_samples[chain, :, latent_idx], label=f"Chain {chain}")
+                ax.set_title(f"Latent L[{i},{j}]", fontsize=10)
+                latent_idx += 1
+            else:
+                ax.axis("off")
+            ax.grid(True)
+            if j == 0:
+                ax.set_ylabel("Value")
+
+    handles, labels = axes[0, 0].get_legend_handles_labels()
+    fig.legend(handles, labels, loc="lower center", ncol=n_chains,
+               bbox_to_anchor=(0.5, 0.02))
+    plt.suptitle("Cholesky Factor of Precision Matrix", fontsize=20)
     plt.tight_layout(rect=[0, 0.05, 1, 0.95])
     plt.show()
 
@@ -131,8 +171,22 @@ def recover_covariance_matrices(latent_samples_sorted):
     return v_latent_to_sigma(latent_samples_sorted)
 
 
+def recover_covariance_matrix(latent_samples):
+    """Map latent Cholesky-of-precision draws back to a covariance matrix
+    (single-component model - one fewer axis than recover_covariance_matrices)."""
+    bijector_tril = tfb.FillScaleTriL()
+
+    def latent_to_sigma(latent_vec):
+        L = bijector_tril.forward(latent_vec)
+        precision = L @ L.T
+        return jnp.linalg.inv(precision)
+
+    v_latent_to_sigma = jax.vmap(jax.vmap(latent_to_sigma))
+    return v_latent_to_sigma(latent_samples)
+
+
 def plot_final_covariance_complete(samples, true_matrix=None,
-                                   empirical_matrix=None, component_idx=0):
+                                   empirical_matrix=None, component_idx=0, title=None):
     n_dim = samples.shape[-1]
     fig, axes = plt.subplots(n_dim, n_dim, figsize=(18, 16))
     if n_dim == 1:
@@ -191,7 +245,7 @@ def plot_final_covariance_complete(samples, true_matrix=None,
 
     fig.legend(handles=legend_elements, loc="upper right",
                bbox_to_anchor=(0.9, 0.9), fontsize=14, frameon=True)
-    plt.suptitle(f"Posterior Σ_k - Component {component_idx}", fontsize=24, y=0.98)
+    plt.suptitle(title or f"Posterior Σ_k - Component {component_idx}", fontsize=24, y=0.98)
     plt.subplots_adjust(hspace=0.6, wspace=0.2)
     plt.show()
 
@@ -248,6 +302,25 @@ def summarize_mu_k(mu_samples, K, P, param_names, true_mu=None, K_true=None):
         display(df.round(4).set_index("Parameter"))
 
 
+def summarize_mu(mu_samples, P, param_names, true_mu=None):
+    """Summarise the posterior population mean mu (single-component model -
+    no component axis, so no assignment matching is needed)."""
+    mu_flat = mu_samples.reshape(-1, P)
+    post_mu_mean = mu_flat.mean(axis=0)
+
+    df = pd.DataFrame({
+        "Parameter":      param_names,
+        "Posterior_Mean": post_mu_mean,
+        "Posterior_Std":  mu_flat.std(axis=0),
+    })
+    if true_mu is not None:
+        df.insert(1, "True_Value", true_mu)
+        df["Diff_Abs"] = np.abs(true_mu - df["Posterior_Mean"])
+
+    print("\n=== mu: Posterior Summary ===")
+    display(df.round(4).set_index("Parameter"))
+
+
 def plot_mu_k_diagnostics(mu_samples, K, P, param_names, n_lags=30):
     """Goose-style diagnostics (trace, distribution, ACF) for each mu_k[k, p]."""
     n_chains = mu_samples.shape[0]
@@ -288,6 +361,46 @@ def plot_mu_k_diagnostics(mu_samples, K, P, param_names, n_lags=30):
             plt.show()
 
 
+def plot_mu_diagnostics(mu_samples, P, param_names, n_lags=30):
+    """Goose-style diagnostics (trace, distribution, ACF) for each mu[p]
+    (single-component model - no component loop)."""
+    n_chains = mu_samples.shape[0]
+    for p in range(P):
+        fig = plt.figure(figsize=(12, 7))
+        fig.suptitle(f"mu[{param_names[p]}]", fontsize=14, y=0.95)
+        gs_layout = gridspec.GridSpec(2, 2, height_ratios=[1.2, 1], hspace=0.3, wspace=0.2)
+
+        ax_trace = fig.add_subplot(gs_layout[0, :])
+        for chain in range(n_chains):
+            ax_trace.plot(mu_samples[chain, :, p], label=f"{chain}")
+        ax_trace.set_xlabel("Iteration")
+        ax_trace.set_ylabel("Value")
+        ax_trace.grid(True, alpha=1)
+        ax_trace.legend(title="Chain", loc="center left",
+                        bbox_to_anchor=(1.02, 0.5), frameon=False)
+
+        ax_dens = fig.add_subplot(gs_layout[1, 0])
+        all_draws = mu_samples[:, :, p].reshape(-1)
+        ci_low, ci_high = np.percentile(all_draws, [2.5, 97.5])
+        for chain in range(n_chains):
+            sns.kdeplot(mu_samples[chain, :, p], ax=ax_dens, fill=False)
+        ax_dens.axvline(ci_low, color="black", linestyle=":", lw=1.2, label="95% CI")
+        ax_dens.axvline(ci_high, color="black", linestyle=":", lw=1.2)
+        ax_dens.set_xlabel("Value")
+        ax_dens.set_ylabel("Density")
+        ax_dens.set_title(f"95% CI: [{ci_low:.3f}, {ci_high:.3f}]", fontsize=10)
+        ax_dens.grid(True)
+
+        ax_acf = fig.add_subplot(gs_layout[1, 1])
+        for chain in range(n_chains):
+            ax_acf.plot(compute_acf(mu_samples[chain, :, p], nlags=n_lags), alpha=1)
+        ax_acf.set_xlabel("Lag")
+        ax_acf.set_ylabel("Autocorrelation")
+        ax_acf.set_ylim(-0.1, 1.05)
+        ax_acf.grid(True)
+        plt.show()
+
+
 def generate_delta_summaries(delta_samples, param_names, demo_names, true_delta=None):
     mean, std = np.mean(delta_samples, axis=0), np.std(delta_samples, axis=0)
     df_post = pd.DataFrame(index=demo_names, columns=param_names)
@@ -307,126 +420,6 @@ def generate_delta_summaries(delta_samples, param_names, demo_names, true_delta=
                 df_diff.iloc[i, j] = f"{diff_mean[i, j]:.3f}"
         print("\n=== Absolute Difference in Delta (|True - Posterior|) ===")
         display(df_diff)
-
-
-def delta_summary_rows(delta_draws, true_delta, demo_names, param_names,
-                       cond=None, ci=(2.5, 97.5)):
-    """Tidy, persistable per-element posterior summary of the demographic shift matrix Delta.
-
-    One row per Delta element ``(demo d, param p)`` carrying the posterior **mean** and
-    **std** (the "=== Posterior distribution of Delta (mean + std) ===" table) plus the
-    credible-interval bounds (default 95% CI) and the ground-truth ``TRUE_DELTA`` value,
-    so each model run's Delta estimates can be compared to truth without re-opening the
-    full posterior. This is the numeric, file-friendly form of
-    ``generate_delta_summaries`` / ``plot_delta_distributions`` and is the SINGLE source
-    of truth reused by ``analysis/post_process.delta_recovery_rows`` - so a run's saved
-    ``out/delta_summary/<run_key>.csv`` and the gathered ``delta_recovery.csv`` agree
-    element-for-element.
-
-    Parameters
-    ----------
-    delta_draws : array (chains, draws, D, P) or (draws, D, P), or None.
-        Posterior draws of the model's ``Delta`` pos_key. ``None`` / fewer than 2 dims /
-        ``D == 0`` -> ``[]`` (scenarios without demographic covariates).
-    true_delta : array (D, P) or None.
-        Ground-truth ``TRUE_DELTA``; ``None`` -> ``true_value``/``bias``/``in_ci`` NaN.
-    demo_names : length-D row labels (falls back to ``demo{d}``).
-    param_names : length-P column labels.
-    cond : dict, optional
-        Identifying columns (run id, condition keys) prepended to every row so the
-        per-run CSVs concatenate cleanly.
-    ci : (low, high) percentiles for the credible interval. Default ``(2.5, 97.5)`` = 95%.
-
-    Returns
-    -------
-    list[dict] : columns ``[*cond, demo, param, post_mean, post_std, ci_low, ci_high,
-                 true_value, bias, in_ci]``. ``bias = post_mean - true_value`` is the
-                 SIGNED deviation from truth (positive = overestimate), matching the
-                 convention in analysis/plot_recovery.py (``delta_bias_plot``) and
-                 ``beta_recovery_rows`` - so direction is preserved, not just magnitude.
-    """
-    if delta_draws is None:
-        return []
-    Delta = np.asarray(delta_draws)
-    if Delta.ndim < 2:
-        return []
-    D, P = Delta.shape[-2], Delta.shape[-1]
-    if D == 0:
-        return []
-    flat = Delta.reshape(-1, D, P)
-    lo_q, hi_q = ci
-    cond = dict(cond or {})
-    td = None if true_delta is None else np.asarray(true_delta, dtype=float)
-    if demo_names is None:
-        demo_names = [f"demo{d}" for d in range(D)]
-    rows = []
-    for dd in range(D):
-        for p in range(P):
-            draws = flat[:, dd, p]
-            lo, hi = np.percentile(draws, [lo_q, hi_q])
-            mean = float(draws.mean())
-            tv = float(td[dd, p]) if td is not None else float("nan")
-            rows.append({**cond, "demo": demo_names[dd], "param": param_names[p],
-                         "post_mean": mean, "post_std": float(draws.std()),
-                         "ci_low": float(lo), "ci_high": float(hi), "true_value": tv,
-                         "bias": ((mean - tv) if td is not None else float("nan")),
-                         "in_ci": (bool(lo <= tv <= hi) if td is not None else None)})
-    return rows
-
-
-def beta_summary_rows(beta_draws, true_beta, param_names, cond=None, ci=(2.5, 97.5)):
-    """Tidy, persistable per-element posterior summary of the unit-level coefficients beta_i.
-
-    One row per ``(unit i, param p)`` carrying the posterior **mean**, **std** and
-    credible-interval bounds (default 95% CI) of ``beta_i[p]``, plus the ground-truth
-    ``TRUE_BETA`` value and the signed ``bias``. Unlike the component means/covariances
-    (``mu_k`` / ``Sigma_k``), each unit's ``beta_i`` is INDIVIDUALLY IDENTIFIED and
-    UNAFFECTED by component label switching, so an element-wise posterior summary is
-    meaningful for every sampler (no ECR relabeling needed). With N units and P params
-    this is ``N * P`` rows per run (e.g. 300 * 4 = 1200).
-
-    Mirrors ``delta_summary_rows``'s schema/sign convention so the two per-run tables
-    (``out/delta_summary`` and ``out/beta_summary``) share columns.
-
-    Parameters
-    ----------
-    beta_draws : array (chains, draws, N, P) or (draws, N, P), or None.
-        Posterior draws of the model's ``beta_i`` pos_key. ``None`` / < 2 dims -> ``[]``.
-    true_beta : array (N, P) or None.
-        Ground-truth ``TRUE_BETA``; ``None`` -> ``true_value``/``bias``/``in_ci`` NaN.
-    param_names : length-P column labels.
-    cond : dict, optional. Identifying columns prepended to every row.
-    ci : (low, high) percentiles for the credible interval. Default 95% CI.
-
-    Returns
-    -------
-    list[dict] : columns ``[*cond, unit, param, post_mean, post_std, ci_low, ci_high,
-                 true_value, bias, in_ci]`` (``bias = post_mean - true_value``, signed).
-    """
-    if beta_draws is None:
-        return []
-    beta = np.asarray(beta_draws)
-    if beta.ndim < 2:
-        return []
-    N, P = beta.shape[-2], beta.shape[-1]
-    flat = beta.reshape(-1, N, P)
-    mean = flat.mean(axis=0)                              # (N,P)
-    std = flat.std(axis=0)                                # (N,P)
-    lo, hi = np.percentile(flat, list(ci), axis=0)        # (N,P) each
-    cond = dict(cond or {})
-    tb = None if true_beta is None else np.asarray(true_beta, dtype=float)
-    rows = []
-    for i in range(N):
-        for p in range(P):
-            m = float(mean[i, p])
-            tv = float(tb[i, p]) if tb is not None else float("nan")
-            rows.append({**cond, "unit": i, "param": param_names[p],
-                         "post_mean": m, "post_std": float(std[i, p]),
-                         "ci_low": float(lo[i, p]), "ci_high": float(hi[i, p]),
-                         "true_value": tv,
-                         "bias": ((m - tv) if tb is not None else float("nan")),
-                         "in_ci": (bool(lo[i, p] <= tv <= hi[i, p]) if tb is not None else None)})
-    return rows
 
 
 def plot_delta_distributions(delta_samples, param_names, demo_names, true_delta=None):
@@ -779,20 +772,6 @@ def _sigma_from_latent(latent):                      # (C,S,K,n_latent) -> (C,S,
     return np.linalg.inv(prec)
 
 
-def _split_chains(a):
-    """Make a (C, S, ...) series usable by az.rhat for a SINGLE-chain run: split that one
-    chain into two halves so a within-chain split-R-hat is computed (arviz refuses a 1-chain
-    input and returns NaN). Multi-chain arrays pass through unchanged. This matches the
-    half-split marginal_comparison already applies for c1 runs, so the ECR gate
-    (classify_outcome) is defined for the c1 family too — a within-chain check only, it
-    cannot detect multimodality a lone chain never explored (that needs the c2 runs)."""
-    a = np.asarray(a)
-    if a.ndim < 2 or a.shape[0] != 1 or a.shape[1] < 4:
-        return a
-    h = a.shape[1] // 2
-    return np.concatenate([a[:, :h], a[:, h:2 * h]], axis=0)
-
-
 def invariant_convergence_summary(posterior_samples, include_cov=True):
     """
     R-hat and ESS for LABEL-INVARIANT functionals — the honest convergence check
@@ -807,12 +786,12 @@ def invariant_convergence_summary(posterior_samples, include_cov=True):
     mix_mean = np.einsum("csk,cskp->csp", pvec, mu)  # E[u] = Σ_k p_k μ_k
     for p in range(P):
         a = mix_mean[:, :, p]
-        rows.append({"quantity": f"E[u]_{p}", "rhat": float(az.rhat(_split_chains(a))), "ess": float(az.ess(a))})
+        rows.append({"quantity": f"E[u]_{p}", "rhat": float(az.rhat(a)), "ess": float(az.ess(a))})
 
     pvec_sorted = np.sort(pvec, axis=-1)
     for k in range(K):
         a = pvec_sorted[:, :, k]
-        rows.append({"quantity": f"pvec_sorted_{k}", "rhat": float(az.rhat(_split_chains(a))), "ess": float(az.ess(a))})
+        rows.append({"quantity": f"pvec_sorted_{k}", "rhat": float(az.rhat(a)), "ess": float(az.ess(a))})
 
     if include_cov:
         Sigma = _sigma_from_latent(np.asarray(posterior_samples["sigma_inv_chol_k_latent"]))
@@ -820,7 +799,7 @@ def invariant_convergence_summary(posterior_samples, include_cov=True):
         second = np.einsum("csk,cskpq->cspq", pvec, Sigma + outer)
         mbar   = np.einsum("csp,csq->cspq", mix_mean, mix_mean)
         tr     = np.einsum("cspp->cs", second - mbar)
-        rows.append({"quantity": "tr(Cov[u])", "rhat": float(az.rhat(_split_chains(tr))), "ess": float(az.ess(tr))})
+        rows.append({"quantity": "tr(Cov[u])", "rhat": float(az.rhat(tr)), "ess": float(az.ess(tr))})
 
     return pd.DataFrame(rows).set_index("quantity")
 
