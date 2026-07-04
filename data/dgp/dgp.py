@@ -160,6 +160,137 @@ def generate_mixture_simulated_data(
     }
 
 
+def generate_standard_simulated_data(n_units=300, n_obs=50, n_alts=4,
+                                      n_params=None, n_demos=2, seed=42):
+    """
+    Simulate data for the STANDARD (one-normal-component, no mixture) Bayesian
+    Hierarchical Multinomial Logit model, Rossi (2006) §5.4:
+
+        beta_i = mu + Z[i] @ Delta + u_i,   u_i ~ N(0, Sigma)
+
+    All ground truth is DRAWN, not hardcoded, mirroring the mixture DGP's
+    distributions specialised to a single component:
+
+      - mu    ~ N(0, MU_TRUTH_SD^2), MU_TRUTH_SD = 1.0 — a truth-generating
+        scale chosen so no single term (mu vs. Delta @ Z vs. unit noise)
+        dominates simulated utility. Deliberately independent of the model's
+        own diffuse prior constant A_MU = 0.01 (Rossi §5.4's "standard
+        diffuse prior settings", A = 0.01 * I): A_MU describes plausible
+        prior *belief* for estimation, not a plausible *true* value to
+        simulate from.
+      - Delta ~ N(0, 0.5^2) elementwise
+      - Sigma   diagonal, variances ~ Uniform(0.5, 2.0)
+      - Z column-centred, no intercept; continuous X attributes standardised
+        globally before choice simulation
+
+    There is one component, so no ground-truth key carries a component axis
+    or a _k suffix: TRUE_MU (P,), TRUE_DELTA (n_demos, P), TRUE_SIGMA (P, P).
+
+    Returns a dict with X, y, Z, unit_idx, dims, and all TRUE_ ground truth.
+    """
+    np.random.seed(seed)
+
+    if n_params is None:
+        n_params = n_alts
+    if n_params < n_alts - 1:
+        raise ValueError(f"n_params ({n_params}) must be at least n_alts - 1")
+
+    n_ascs       = n_alts - 1
+    n_continuous = n_params - n_ascs
+
+    # ------------------------------------------------------------------
+    # Demographics — column-wise centred, no intercept  (Rossi §5.5)
+    # ------------------------------------------------------------------
+    Z  = np.random.normal(0, 1, size=(n_units, n_demos))
+    Z -= Z.mean(axis=0)
+
+    # ------------------------------------------------------------------
+    # Ground truth — drawn, single component
+    # ------------------------------------------------------------------
+    A_MU = 0.01                # Rossi §5.4 diffuse prior constant (bayesm's Amu);
+                                # recorded for provenance only, not used to draw truth.
+    MU_TRUTH_SD = 1.0           # truth-generating scale (see docstring); deliberately
+                                # decoupled from A_MU's diffuse-prior scale.
+
+    true_mu    = np.random.normal(0.0, MU_TRUTH_SD, size=n_params)
+    Delta_true = np.random.normal(0, 0.5, size=(n_demos, n_params))
+    true_Sigma = np.diag(np.random.uniform(0.5, 2.0, n_params))
+
+    beta_true = np.zeros((n_units, n_params))
+    for i in range(n_units):
+        mu_i = true_mu + Z[i] @ Delta_true
+        beta_true[i] = np.random.multivariate_normal(mu_i, true_Sigma)
+
+    # ------------------------------------------------------------------
+    # Design matrix X
+    #   Pass 1 — fill X_array (ASC block fixed; continuous block random)
+    #   Standardise — per continuous attribute across all obs × alts
+    #   Pass 2 — simulate choices on standardised X
+    # ------------------------------------------------------------------
+    n_total = n_units * n_obs
+    X_array = np.zeros((n_total, n_alts, n_params))
+
+    flat_idx = 0
+    for i in range(n_units):
+        for t in range(n_obs):
+            X_it = np.zeros((n_alts, n_params))
+            for a in range(1, n_alts):          # alt 0 is reference
+                X_it[a, a - 1] = 1.0
+            if n_continuous > 0:
+                X_it[:, n_ascs:] = np.random.uniform(
+                    1.0, 5.0, size=(n_alts, n_continuous)
+                )
+            X_array[flat_idx] = X_it
+            flat_idx += 1
+
+    if n_continuous > 0:
+        for c in range(n_continuous):
+            col   = X_array[:, :, n_ascs + c]
+            mu_c  = col.mean()
+            std_c = col.std() + 1e-8
+            X_array[:, :, n_ascs + c] = (col - mu_c) / std_c
+
+    X_list, y_list, unit_idx_list = [], [], []
+
+    flat_idx = 0
+    for i in range(n_units):
+        for t in range(n_obs):
+            X_it  = X_array[flat_idx]
+            U_it  = X_it @ beta_true[i]
+            exp_U = np.exp(U_it - U_it.max())
+            probs = exp_U / exp_U.sum()
+            y_it  = int(np.random.choice(n_alts, p=probs))
+            X_list.append(X_it)
+            y_list.append(y_it)
+            unit_idx_list.append(i)
+            flat_idx += 1
+
+    asc_names   = [f"Alt{a}" for a in range(1, n_ascs + 1)]
+    cont_names  = ["Price"] if n_continuous == 1 else [f"X{c + 1}" for c in range(n_continuous)]
+    param_names = asc_names + cont_names
+    demo_names  = [f"z{d + 1}" for d in range(n_demos)]
+
+    return {
+        "X":           jnp.array(X_list),
+        "y":           jnp.array(y_list),
+        "Z":           jnp.array(Z),
+        "unit_idx":    jnp.array(unit_idx_list),
+        "n_units":     n_units,
+        "n_params":    n_params,
+        "n_demos":     n_demos,
+        "n_alts":      n_alts,
+        "K":           1,
+        "param_names": param_names,
+        "demo_names":  demo_names,
+        "TRUE_MU":     true_mu,
+        "TRUE_DELTA":  Delta_true,
+        "TRUE_SIGMA":  true_Sigma,
+        "TRUE_BETA":   beta_true,
+        "DGP_A_MU":    float(A_MU),
+        "DGP_MU_TRUTH_SD": float(MU_TRUTH_SD),
+    }
+
+
 def save_to_json(data, filename="sim_data.json"):
     """Serialise all arrays to lists and write to a JSON file."""
 

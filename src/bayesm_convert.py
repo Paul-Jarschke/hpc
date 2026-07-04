@@ -93,3 +93,26 @@ def read_raw_draws(raw_dir):
         canonical["Delta"] = stack("delta")                # (C, S, D, P)
 
     return {k: np.asarray(v) for k, v in canonical.items()}, meta_r, dims
+
+
+def to_plain_keys(post):
+    """Convert a K=1 mixture-format posterior dict to the STANDARD model's plain keys.
+
+    Mirrors the study's run_standard_experiment._bayesm_to_plain_keys (upstream @
+    893e63f): bayesm always samples through rhierMnlRwMixture, so with ncomp=1 the
+    bridge produces mixture-style arrays with a size-1 component axis. This squeezes
+    that axis and renames so all three standard arms (bayesm/nuts/hmc) share one
+    format (mu, sigma_inv_chol_latent, beta_i, [Delta]); pvec (identically 1) is
+    dropped.
+    """
+    K = np.asarray(post["mu_k"]).shape[2]
+    if K != 1:
+        raise ValueError(f"to_plain_keys expects a K=1 posterior, got K={K}")
+    plain = {
+        "mu": np.asarray(post["mu_k"])[:, :, 0, :],
+        "sigma_inv_chol_latent": np.asarray(post["sigma_inv_chol_k_latent"])[:, :, 0, :],
+        "beta_i": np.asarray(post["beta_i"]),
+    }
+    if "Delta" in post:
+        plain["Delta"] = np.asarray(post["Delta"])
+    return plain

@@ -10,8 +10,9 @@ How it's found:
   (`ln -s $HOME/<proj>/src $RUNDIR/src`), and `run.qmd` puts the rundir on `sys.path`.
 
 Contents:
-- `mixturemodel.py`, `bayesm_mixture_model.py`, `analysis.py`, `label_switching.py`,
-  `marginal_comparison.py`, `inference/{nuts,hmc,init,bayesm_gibbs}.py` - **vendored
+- `mixturemodel.py`, `bayesm_mixture_model.py`, `standardmodel.py`, `analysis.py`,
+  `label_switching.py`, `marginal_comparison.py`,
+  `inference/{nuts,hmc,init,bayesm_gibbs}.py` - **vendored
   verbatim** from HierarchicalBayesianMultinomialLogit @ `893e63f`
   (https://github.com/Paul-Jarschke/HierarchicalBayesianMultinomialLogit).
   Do not edit; re-vendor from upstream if needed. Highlights of that revision:
@@ -31,6 +32,10 @@ Contents:
   (`grid` column: `full` / `chebyshev`). Also hosts `delta_summary_rows`,
   `beta_summary_rows` and `pvec_mean_table`, which upstream removed from the vendored
   modules but the harness tables still use.
+- `summaries_standard.py` - **harness glue** (not vendored): the standard-model
+  (K=1, jobs 200-202) mirror of `summaries.py` - no ECR/weights/pvec tables, plain
+  posterior keys (`mu`, `sigma_inv_chol_latent`), per-parameter convergence, Sigma
+  recovery with the empirical-covariance overlay, marginal tables on both grids.
 - `bayesm_sampler.R` - vendored + lightly adapted from the study's
   `run_single_bayesm_experiment.R` (function-wrapped so knitr jobs can `source()` it;
   sampling logic identical, verified against upstream @ 893e63f).

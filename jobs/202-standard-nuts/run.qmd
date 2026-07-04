@@ -1,0 +1,372 @@
+---
+title: "standard HBMNL fit (single normal component, 2 chains) — saves full posterior"
+format:
+  html:
+    toc: true
+    number-sections: true
+engine: jupyter
+execute:
+  timeout: 7200  # seconds; must exceed the slowest single fit (SLURM is the real wall-clock cap)
+---
+
+Fits the STANDARD (single-normal-component, no mixture) hierarchical Bayesian
+multinomial logit model (Rossi section 5.4) to one simulated dataset (sampler /
+chains / dataset come from the `params.csv` row `JOB_ROW`), then saves the **full
+posterior** + `meta.json`. Every metric of the study's standard analysis notebook
+(mu / POSTERIOR SIGMA incl. the empirical-covariance overlay / Delta / beta recovery,
+per-parameter convergence, moments, marginal comparison on the full + Chebyshev
+grids) is written per run as tidy CSVs via `src/summaries_standard.py`. Shared
+model/sampler code is vendored from HierarchicalBayesianMultinomialLogit @ 893e63f
+(`src/standardmodel.py`; default init, dense mass matrix on the Sigma block - the
+standard runners have no informed-init option upstream).
+
+CAPSLOCK variables are harness machinery — don't rename them.
+
+## Parameters
+
+```{python}
+# | tags: [parameters]
+JOB_DIR: str = "jobs/202-standard-nuts"
+JOB_ROW: int = 0
+JOB_TESTING: bool = True
+```
+
+## Setup
+
+```{python}
+# | label: imports
+import io
+import json
+import logging
+import pickle
+import re
+import sys
+import time
+from datetime import datetime
+from pathlib import Path
+
+import numpy as np
+import pandas as pd
+
+print("python:", sys.executable)
+print("cwd   :", Path.cwd())
+```
+
+```{python}
+# | label: load-params-row
+JOB_PATH = Path(JOB_DIR)
+PARAMS = pd.read_csv(JOB_PATH / "params.csv").iloc[JOB_ROW, :]
+print(PARAMS)
+```
+
+```{python}
+# | label: identifier
+now = datetime.now().strftime("%Y-%m-%d-%H%M")
+JOB_IDENTIFIER = JOB_PATH.name + "-" + f"{JOB_ROW:04d}" + "-" + now
+PARAMS["job"] = JOB_PATH.name
+PARAMS["run"] = JOB_IDENTIFIER
+```
+
+```{python}
+# | label: directories
+DIR_LOG = JOB_PATH / "log"
+DIR_OUT = JOB_PATH / "out"
+DIR_FIN = JOB_PATH / "finished"
+if JOB_TESTING:
+    DIR_OUT = JOB_PATH / "out-test"
+for d in (DIR_LOG, DIR_OUT, DIR_FIN):
+    d.mkdir(exist_ok=True)
+
+FINFILE = DIR_FIN / str(JOB_ROW)
+if FINFILE.exists() and not JOB_TESTING:
+    raise RuntimeError(
+        f"Row {JOB_ROW} of '{JOB_PATH.name}' is already finished. Delete {FINFILE} to re-run."
+    )
+```
+
+```{python}
+# | label: logger
+formatter = logging.Formatter("%(asctime)s - %(levelname)s - %(message)s")
+handler = logging.FileHandler(filename=DIR_LOG / f"run-{JOB_ROW:04d}.log")
+handler.setFormatter(formatter)
+logger = logging.getLogger(str(JOB_PATH.name))
+logger.addHandler(handler)
+logger.setLevel(logging.INFO)
+logger.info(f"Job started: {JOB_IDENTIFIER}")
+```
+
+## Model code
+
+### Make shared src/ importable
+
+```{python}
+# | label: import-vendored
+JOB_PATH_ABS = JOB_PATH.resolve()
+# Shared src/ is at the repo root locally (JOB_PATH/../..) and is symlinked into the
+# node-local rundir on the HPC (JOB_PATH/src). Add both so `import src.*` resolves either way.
+for _p in (JOB_PATH_ABS, JOB_PATH_ABS.parent.parent):
+    if str(_p) not in sys.path:
+        sys.path.insert(0, str(_p))
+
+import jax  # noqa: F401
+import jax.numpy as jnp
+
+from src.standardmodel import (
+    build_standard_hbmnl_model,
+    run_nuts_inference_standard_hbmnl,
+    run_hmc_inference_standard_hbmnl,
+)
+
+print("jax backend:", jax.default_backend())
+```
+
+### Extract run settings
+
+```{python}
+# | label: run-settings
+dataset_key = str(PARAMS["dataset_key"])
+sampler     = str(PARAMS["sampler"])
+n_chains    = int(PARAMS["n_chains"])
+warmup      = int(PARAMS["warmup"])
+posterior   = int(PARAMS["posterior"])
+seed        = int(PARAMS["seed"])
+a_mu        = float(PARAMS["a_mu"])
+a_delta     = float(PARAMS["a_delta"])
+num_integration_steps = int(PARAMS["num_integration_steps"])
+
+# Testing shortcut: short MCMC (still above goose's Stan-window minimum ~150).
+if JOB_TESTING:
+    warmup, posterior = 200, 100
+    logger.info(f"JOB_TESTING: warmup={warmup}, posterior={posterior}")
+```
+
+### Load the dataset (with ground truth)
+
+`data/in/` is two levels above the job dir — true locally (cwd = repo root) and on
+the HPC (where `template.sh.j2` symlinks `data` next to the rundir).
+
+```{python}
+# | label: load-data
+DATA_DIR = JOB_PATH_ABS.parent.parent / "data" / "in" / "standard_model"
+data_path = DATA_DIR / f"{dataset_key}.json"
+logger.info(f"Loading {data_path}")
+with open(data_path) as f:
+    raw = json.load(f)
+
+P = int(raw["n_params"])
+choice_data = {
+    "X":        jnp.array(raw["X"]),
+    "y":        jnp.array(raw["y"]),
+    "unit_idx": jnp.array(raw["unit_idx"]),
+    "Z":        jnp.array(raw["Z"]) if raw.get("Z") is not None else None,
+    "n_params": P,
+    "n_units":  int(raw["n_units"]),
+    "n_demos":  int(raw.get("n_demos", 0)),
+}
+print(f"dataset={dataset_key}  N={choice_data['n_units']}  P={P}  D={choice_data['n_demos']}")
+print(f"sampler={sampler}  chains={n_chains}  warmup={warmup}  posterior={posterior}")
+```
+
+### Build the model
+
+```{python}
+# | label: build-model
+model = build_standard_hbmnl_model(
+    data_dict=choice_data, A_delta=a_delta, a_mu=a_mu,
+)
+```
+
+### Run the sampler (capturing the goose log)
+
+```{python}
+# | label: sample
+log_buffer = io.StringIO()
+_gh = logging.StreamHandler(log_buffer)
+_gh.setFormatter(formatter)
+_liesel_logger = logging.getLogger("liesel")
+_liesel_logger.setLevel(logging.INFO)
+_liesel_logger.addHandler(_gh)
+
+t0 = time.time()
+if sampler == "nuts":
+    mcmc_results, posterior_samples = run_nuts_inference_standard_hbmnl(
+        model=model, chains=n_chains, warmup=warmup, posterior=posterior, seed=seed,
+    )
+elif sampler == "hmc":
+    mcmc_results, posterior_samples = run_hmc_inference_standard_hbmnl(
+        model=model, num_integration_steps=num_integration_steps,
+        chains=n_chains, warmup=warmup, posterior=posterior, seed=seed,
+    )
+else:
+    raise ValueError(f"Unknown sampler: {sampler}")
+runtime_s = time.time() - t0
+
+_liesel_logger.removeHandler(_gh)
+sampling_log_text = log_buffer.getvalue()
+logger.info(f"Sampling done in {runtime_s:.1f}s")
+print(f"Sampling done in {runtime_s:.1f}s")
+```
+
+## Save the full posterior + meta
+
+The complete posterior (chain structure `(C,S,…)` **+ `beta_i`**) uses the standard
+model's plain keys (`mu`, `sigma_inv_chol_latent`, `Delta`, `beta_i` — no component
+axis, no pvec). Tier-2 subset rule as in the mixture jobs.
+
+```{python}
+# | label: save-posterior-raw
+RUN_KEY = f"{dataset_key}__standard_{sampler}_c{n_chains}"
+
+# Tier-2 subset: keep the FULL posterior only for the first few replicate seeds (for
+# cross-sampler comparisons needing raw chains together). EVERY run still writes the
+# tidy per-run summaries below. See src/summaries_standard.py.
+POSTERIOR_SUBSET_MAX = 5
+data_seed = int(PARAMS.get("data_seed", -1))
+SAVE_POSTERIOR = JOB_TESTING or data_seed <= POSTERIOR_SUBSET_MAX
+
+post_np = {k: np.asarray(v) for k, v in posterior_samples.items()}
+if SAVE_POSTERIOR:
+    DIR_POST = DIR_OUT / "posterior_raw"
+    DIR_POST.mkdir(parents=True, exist_ok=True)
+    with open(DIR_POST / f"{RUN_KEY}.pkl", "wb") as f:
+        pickle.dump(post_np, f)
+    print("saved posterior_raw:", {k: tuple(v.shape) for k, v in post_np.items()})
+else:
+    print(f"posterior_raw NOT saved (data_seed={data_seed} > {POSTERIOR_SUBSET_MAX}); on-node summaries only")
+```
+
+## Save sampler diagnostics
+
+Per-kernel transition diagnostics from Goose (NUTS: `divergent`/`treedepth`/`leapfrog`/
+`acceptance_prob`; HMC: `divergent`/`acceptance_prob`/`position_moved`), arrays
+`(chains, draws)`. Pure post-hoc extraction from `mcmc_results`.
+
+```{python}
+# | label: save-diagnostics
+import dataclasses
+
+def _extract_diagnostics(results):
+    try:
+        tis = results.get_posterior_transition_infos()   # {kernel_id: TransitionInfo}
+    except Exception as e:
+        logger.warning(f"transition infos unavailable: {e}")
+        return {}, {}
+    out = {}
+    for kid, info in tis.items():
+        out[kid] = {f.name: np.asarray(getattr(info, f.name))
+                    for f in dataclasses.fields(info)}
+    try:
+        kbp = dict(results.get_kernels_by_pos_key())     # {pos_key: kernel_id}
+    except Exception:
+        kbp = {}
+    return out, kbp
+
+diag, kernels_by_pos_key = _extract_diagnostics(mcmc_results)
+DIR_DIAG = DIR_OUT / "diagnostics"
+DIR_DIAG.mkdir(parents=True, exist_ok=True)
+with open(DIR_DIAG / f"{RUN_KEY}.pkl", "wb") as f:
+    pickle.dump(
+        {"sampler": sampler, "run_key": RUN_KEY,
+         "kernels_by_pos_key": kernels_by_pos_key,  # {pos_key: kernel_id}
+         "transition_infos": diag}, f)              # {kernel_id: {field: (chains, draws)}}
+
+def _diag_rollup(diag):
+    n_div, max_td, max_lp, accs = 0, None, None, []
+    for fl in diag.values():
+        if "divergent" in fl:
+            n_div += int(np.sum(fl["divergent"]))
+        if "treedepth" in fl:
+            t = int(np.max(fl["treedepth"])); max_td = t if max_td is None else max(max_td, t)
+        if "leapfrog" in fl:
+            l = int(np.max(fl["leapfrog"])); max_lp = l if max_lp is None else max(max_lp, l)
+        if "acceptance_prob" in fl:
+            accs.append(float(np.mean(fl["acceptance_prob"])))
+    mean_acc = round(float(np.mean(accs)), 4) if accs else None
+    return n_div, max_td, max_lp, mean_acc
+
+n_divergent, max_treedepth, max_leapfrog, mean_acceptance = _diag_rollup(diag)
+print("diagnostics:", {"n_divergent": n_divergent, "max_treedepth": max_treedepth,
+                       "max_leapfrog": max_leapfrog, "mean_acceptance": mean_acceptance})
+```
+
+```{python}
+# | label: save-meta
+def _count_sampling_errors(log_text):
+    total = 0
+    for line in log_text.splitlines():
+        if "Errors per chain" in line:
+            m = re.search(r":\s*(\d+)\s*/\s*\d+\s*transitions", line)
+            if m:
+                total += int(m.group(1))
+    return total
+
+meta = {
+    "job": str(PARAMS["job"]), "run": str(PARAMS["run"]), "job_row": int(JOB_ROW),
+    "run_key": RUN_KEY, "model": "standard_hbmnl",
+    "dataset_key": dataset_key, "scenario": str(PARAMS.get("scenario", "standard")),
+    "k_true": 1, "data_seed": int(PARAMS.get("data_seed", -1)),
+    "k_model": 1, "sampler": sampler, "n_chains": n_chains,
+    "warmup": warmup, "posterior": posterior, "seed": seed,
+    "a_mu": a_mu, "a_delta": a_delta,
+    "num_integration_steps": num_integration_steps if sampler == "hmc" else None,
+    "n_units": choice_data["n_units"], "n_params": P, "n_demos": choice_data["n_demos"],
+    "runtime_s": round(runtime_s, 2),
+    "n_sampling_errors": _count_sampling_errors(sampling_log_text),
+    "n_divergent": n_divergent, "max_treedepth": max_treedepth,
+    "max_leapfrog": max_leapfrog, "mean_acceptance": mean_acceptance,
+    "posterior_shapes": {k: list(v.shape) for k, v in post_np.items()},
+    "finished_at": datetime.now().isoformat(timespec="seconds"),
+}
+DIR_META = DIR_OUT / "meta"
+DIR_META.mkdir(parents=True, exist_ok=True)
+with open(DIR_META / f"{RUN_KEY}.json", "w") as f:
+    json.dump(meta, f, indent=2)
+print("meta:", json.dumps({k: meta[k] for k in
+      ("run_key", "runtime_s", "n_sampling_errors", "n_divergent", "mean_acceptance")}))
+```
+
+## Save per-run summary tables (Tier 1)
+
+Every tidy table computable from THIS run's posterior + ground truth is written as
+`out/<table>/<run_key>.csv`: mu / SIGMA (incl. empirical covariance) / Delta / beta
+recovery, per-parameter convergence (R-hat/ESS for mu, every Sigma element, tr(Sigma),
+Delta and the notebook's two inspected households), moments, marginal distances and
+density diagnostics on BOTH grid scenarios, and sampler diagnostics. The same
+`src/summaries_standard.py` builds them on-node here AND post-hoc, so per-run CSVs
+and gathered tables agree exactly. If summarising fails, the posterior is saved as a
+fallback so an expensive run is never lost.
+
+```{python}
+# | label: save-summaries
+from src import summaries_standard as smry
+
+diag_payload = {"kernels_by_pos_key": kernels_by_pos_key, "transition_infos": diag}
+try:
+    summary_tables, _ = smry.per_run_tables(post_np, meta, raw, diag_payload)
+    for _name, _rows in summary_tables.items():
+        if not _rows:
+            continue
+        _dir = DIR_OUT / _name
+        _dir.mkdir(parents=True, exist_ok=True)
+        pd.DataFrame(_rows).to_csv(_dir / f"{RUN_KEY}.csv", index=False)
+    logger.info("per-run summaries: " + ", ".join(f"{k}={len(v)}" for k, v in summary_tables.items()))
+    print("saved summaries:", {k: len(v) for k, v in summary_tables.items()})
+except Exception as e:  # never lose a run to a summary bug: keep the posterior to re-derive
+    logger.error(f"on-node summaries failed: {e}")
+    if not SAVE_POSTERIOR:
+        DIR_POST = DIR_OUT / "posterior_raw"
+        DIR_POST.mkdir(parents=True, exist_ok=True)
+        with open(DIR_POST / f"{RUN_KEY}.pkl", "wb") as f:
+            pickle.dump(post_np, f)
+        logger.error("saved posterior_raw as fallback for post-hoc re-derivation")
+    print(f"WARNING: on-node summaries failed ({e}); see log")
+```
+
+## Mark job as finished
+
+```{python}
+# | label: mark-finished
+if not JOB_TESTING:
+    FINFILE.touch()
+    logger.info("Marked finished.")
+```
