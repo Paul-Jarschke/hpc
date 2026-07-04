@@ -413,6 +413,49 @@ def marginal_distance_summary_table(n_chains: int = CHAINS,
     ).reset_index(drop=True)
 
 
+def consolidated_rmse_table(n_chains: int = CHAINS) -> pd.DataFrame:
+    """Consolidated RMSE across ALL elements of a parameter block (beta / Delta),
+    by sampler and k_true (plus a pooled 'all' k_true row per sampler and block).
+
+    Per run the block's elements are pooled into one RMSE (see
+    plot_recovery.consolidated_rmse_by_run); across the replicate runs of a cell
+    this reports the distribution of that per-run RMSE plus `rmse_pooled` =
+    sqrt(mean of squared per-run RMSEs) - the single-number grand RMSE of the cell.
+
+    Returns a tidy long DataFrame:
+        rows    = (block, k_true | 'all', sampler)
+        columns = rmse_pooled, min, q1, mean, median, q3, max, n_sim
+    """
+    from plot_recovery import consolidated_rmse_by_run
+
+    df = consolidated_rmse_by_run(n_chains)
+    both = pd.concat([df, df.assign(k_true="all")], ignore_index=True)
+
+    def _agg(g):
+        a = g["rmse"]
+        return pd.Series({
+            "rmse_pooled": float(np.sqrt((a ** 2).mean())),
+            "min":    a.min(),
+            "q1":     a.quantile(0.25),
+            "mean":   a.mean(),
+            "median": a.median(),
+            "q3":     a.quantile(0.75),
+            "max":    a.max(),
+            "n_sim":  len(a),
+        })
+
+    agg = (both.groupby(["block", "k_true", "sampler"])
+           .apply(_agg, include_groups=False)
+           .reset_index())
+    samplers_present = [s for s in SAMPLER_ORDER if s in agg["sampler"].unique()]
+    agg["sampler"] = pd.Categorical(agg["sampler"], categories=samplers_present, ordered=True)
+    agg["sampler"] = agg["sampler"].map(SAMPLER_LABELS)
+    agg = agg.sort_values(["block", "k_true", "sampler"])
+    stat_cols = ["rmse_pooled", "min", "q1", "mean", "median", "q3", "max"]
+    agg[stat_cols] = agg[stat_cols].round(4)
+    return agg[["block", "k_true", "sampler", *stat_cols, "n_sim"]].reset_index(drop=True)
+
+
 def main():
     OUT_DIR_DELTA_BIAS.mkdir(parents=True, exist_ok=True)
     OUT_DIR_DELTA_SD.mkdir(parents=True, exist_ok=True)
@@ -521,6 +564,15 @@ def main():
 
     # --- Marginal-series convergence tables (R-hat + ESS summaries) ---
     marginal_diag.write_tables(CHAINS)
+
+    # --- Consolidated RMSE (all elements of a block pooled per run), one CSV per
+    # block in that block's own rmse/tables folder ---
+    tbl = consolidated_rmse_table()
+    for block, out_dir in [("beta", OUT_DIR_BETA_RMSE), ("delta", OUT_DIR_DELTA_RMSE)]:
+        sub = tbl[tbl["block"] == block].drop(columns="block")
+        path = out_dir / f"{block}_consolidated_rmse_c{CHAINS}.csv"
+        sub.to_csv(path, index=False)
+        print(f"wrote {len(sub)} rows -> {path}")
 
     # --- Marginal distance summary tables (one set per evaluation grid) ---
     for grid in GRIDS:

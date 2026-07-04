@@ -1083,5 +1083,54 @@ def main() -> None:
     print("wrote", save(p_rt, "runtime_by_sampler_ktrue.png"))
 
 
+# ----------------------------------------------------------------------------- #
+# Consolidated RMSE: ONE per-run number per parameter block (beta / Delta), pooling
+# every element of the block. Definitions per run (= one dataset x sampler fit):
+#   beta : sqrt(mean over params of rmse_p^2). rmse_p in beta_recovery.csv is the
+#          unit-level RMSE over the N units, and every param covers the same N,
+#          so this equals the RMSE pooled over all N*P unit-level errors.
+#   delta: sqrt(mean over the D*P elements of (post_mean - true)^2), from the
+#          per-element signed `bias` column of delta_recovery.csv.
+# ----------------------------------------------------------------------------- #
+def consolidated_rmse_by_run(n_chains: int = 2) -> pd.DataFrame:
+    """Per-run consolidated RMSE for both blocks. Long frame:
+    [block ('beta'|'delta'), sampler, k_true, dataset_key, rmse]."""
+    beta = load_recovery("beta")
+    beta = beta[beta["n_chains"] == n_chains]
+    b = (beta.assign(sq=beta["rmse"] ** 2)
+         .groupby(["sampler", "k_true", "dataset_key"], as_index=False)["sq"].mean())
+    b["rmse"] = np.sqrt(b.pop("sq"))
+    b["block"] = "beta"
+
+    delta = load_recovery("delta")
+    delta = delta[delta["n_chains"] == n_chains]
+    d = (delta.assign(sq=delta["bias"] ** 2)
+         .groupby(["sampler", "k_true", "dataset_key"], as_index=False)["sq"].mean())
+    d["rmse"] = np.sqrt(d.pop("sq"))
+    d["block"] = "delta"
+
+    return pd.concat([b, d], ignore_index=True)
+
+
+def consolidated_rmse_boxplot(block: str, n_chains: int = 2, logy: bool = None) -> ggplot:
+    """Distribution of the per-run consolidated RMSE of ONE parameter block
+    ('beta' or 'delta'): sampler on the x-axis, one facet per k_true - the same
+    layout as the element-wise recovery plots, so boxes and their jitter points
+    line up. beta defaults to a log y-scale (its NUTS tail spans a decade)."""
+    df = consolidated_rmse_by_run(n_chains)
+    df = df[df["block"] == block].copy()
+    df["K_true"] = df["k_true"].astype(str)
+    label = {"beta": "beta", "delta": "Delta"}[block]
+    if logy is None:
+        logy = block == "beta"
+    return recovery_boxplot(
+        df, value="rmse", x="sampler", jitter=True, logy=logy,
+        facet_wrap_by="K_true",
+        title=f"Consolidated {label} RMSE (all elements pooled per run) - {n_chains} chain(s)",
+        xlab="", ylab="RMSE (per-run, pooled)" + (" [log]" if logy else ""),
+        figure_size=(10.0, 6.0),
+    )
+
+
 if __name__ == "__main__":
     main()

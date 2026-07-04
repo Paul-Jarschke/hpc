@@ -122,6 +122,14 @@ def main():
     # figures, under marginal_comparison/ (density series once per grid).
     marginal_diag.make_plots(CHAINS)
 
+    # Consolidated RMSE: one pooled per-run number per parameter block, saved into
+    # each block's own rmse/plots folder.
+    from plot_recovery import consolidated_rmse_boxplot
+    save(consolidated_rmse_boxplot("beta", CHAINS),
+         f"beta/rmse/plots/beta_consolidated_rmse_c{CHAINS}.png")
+    save(consolidated_rmse_boxplot("delta", CHAINS),
+         f"delta/rmse/plots/delta_consolidated_rmse_c{CHAINS}.png")
+
     print("regenerated all figures -> hpc_analysis/mixture_models/out/")
 
 
