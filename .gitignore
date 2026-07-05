@@ -12,6 +12,7 @@ data/in
 data/out
 .vscode
 .env
+*.csv
 *.png
 CLAUDE.md
 USAGE.md
