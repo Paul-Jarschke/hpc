@@ -7,8 +7,8 @@ The STANDARD (single-normal-component, no mixture) HBMNL, Rossi (2006) section 5
 
     beta_i = mu + Z[i] @ Delta + u_i,   u_i ~ N(0, Sigma)
 
-One scenario ("standard", the DGP defaults: 300 units x 50 obs, 4 alternatives,
-2 demographics), replicated over 100 seeds - the same replicate-seed design as the
+One scenario ("standard", the DGP defaults: 300 units x 30 obs, 4 alternatives,
+2 demographics - matching the mixture experiment), replicated over 100 seeds - the same replicate-seed design as the
 mixture experiment, so downstream analysis can report distributions over datasets
 instead of a single seed-42 anecdote (which is all the study repo generated).
 
@@ -20,7 +20,8 @@ Output (one self-describing JSON per dataset, ground truth included):
     data/in/standard_model/std_s{SEED:02d}.json
     data/in/standard_model/manifest.csv      # index joined later by the fit params.csv
 
-The DGP is vendored verbatim from HierarchicalBayesianMultinomialLogit @ 893e63f (see
+The DGP is vendored verbatim from HierarchicalBayesianMultinomialLogit (post-893e63f
+Rossi 5.2.1 update; see
 data/dgp/dgp.py: generate_standard_simulated_data). `data/in/` is gitignored; this
 script + data/dgp/ are the tracked, regenerable source.
 
@@ -55,10 +56,14 @@ EXPERIMENT = "standard_model"
 # kt1_s70 case). Screened below (all_alts_chosen); params.R keeps the first 100 fittable.
 SEEDS = range(1, 106)  # 1..105 inclusive (100 target + 5 backfill buffer)
 
-# The scenario config = the vendored DGP's own defaults (single source of truth).
+# The scenario config = the vendored DGP's own defaults (single source of truth):
+# 300 units x 30 observations, matching the mixture experiment. DGP follows Rossi
+# section 5.2.1: B = Z Delta + U with an uncentred intercept column inside the DGP;
+# the returned dict repackages to the model-facing convention (centred Z, TRUE_MU =
+# Delta's intercept row).
 SCENARIO = {
     "n_units": 300,
-    "n_obs":   50,
+    "n_obs":   30,
     "n_alts":  4,
     "n_demos": 2,
 }

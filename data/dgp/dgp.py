@@ -6,8 +6,8 @@ import jax.numpy as jnp
 
 
 def generate_mixture_simulated_data(
-        n_units=2000, n_obs=100, n_alts=4, n_components=2, n_params=None,
-        n_demos=2, custom_pvec=None, custom_indicators=None, seed=123):
+        n_units=300, n_obs=30, n_alts=4, n_components=2, n_params=None,
+        n_demos=2, custom_pvec=None, custom_indicators=None, seed=1):
     """
     Simulate data for a Bayesian Hierarchical Multinomial Logit model with a mixture-of-normals heterogeneity distribution.
 
@@ -160,31 +160,43 @@ def generate_mixture_simulated_data(
     }
 
 
-def generate_standard_simulated_data(n_units=300, n_obs=50, n_alts=4,
+def generate_standard_simulated_data(n_units=300, n_obs=30, n_alts=4,
                                       n_params=None, n_demos=2, seed=42):
     """
     Simulate data for the STANDARD (one-normal-component, no mixture) Bayesian
-    Hierarchical Multinomial Logit model, Rossi (2006) §5.4:
+    Hierarchical Multinomial Logit model, written in Rossi (2006) §5.2.1 /
+    §5.4.1 notation:
 
-        beta_i = mu + Z[i] @ Delta + u_i,   u_i ~ N(0, Sigma)
+        B = Z Delta + U,   u_i ~ N(0, V_beta)                       (5.2.1)
 
-    All ground truth is DRAWN, not hardcoded, mirroring the mixture DGP's
-    distributions specialised to a single component:
+    B (m x p) stacks the unit-level coefficient rows beta_i'; Z (m x n_z) is
+    the covariate matrix whose FIRST column is an UNCENTRED intercept of ones
+    and whose remaining n_demos demographic columns are column-centred;
+    Delta (n_z x p) maps covariates to coefficients; the rows u_i of U are
+    iid N(0, V_beta).
 
-      - mu    ~ N(0, MU_TRUTH_SD^2), MU_TRUTH_SD = 1.0 — a truth-generating
-        scale chosen so no single term (mu vs. Delta @ Z vs. unit noise)
-        dominates simulated utility. Deliberately independent of the model's
-        own diffuse prior constant A_MU = 0.01 (Rossi §5.4's "standard
-        diffuse prior settings", A = 0.01 * I): A_MU describes plausible
-        prior *belief* for estimation, not a plausible *true* value to
-        simulate from.
-      - Delta ~ N(0, 0.5^2) elementwise
-      - Sigma   diagonal, variances ~ Uniform(0.5, 2.0)
-      - Z column-centred, no intercept; continuous X attributes standardised
-        globally before choice simulation
+    Ground truth is DRAWN, not hardcoded:
 
-    There is one component, so no ground-truth key carries a component axis
-    or a _k suffix: TRUE_MU (P,), TRUE_DELTA (n_demos, P), TRUE_SIGMA (P, P).
+      - Delta intercept row ~ N(0, MU_TRUTH_SD^2), MU_TRUTH_SD = 1.0 — a
+        truth-generating scale chosen so no single term (intercept vs.
+        Delta'z vs. unit noise) dominates simulated utility. Deliberately
+        independent of the model's own diffuse prior constant A_MU = 0.01
+        (Rossi §5.4's "standard diffuse prior settings", A = 0.01 * I):
+        A_MU describes plausible prior *belief* for estimation, not a
+        plausible *true* value to simulate from.
+      - Delta demographic rows ~ N(0, DELTA_TRUTH_SD^2), DELTA_TRUTH_SD = 0.5
+      - V_beta diagonal, variances ~ Uniform(0.5, 2.0)
+      - Continuous X attributes standardised globally before choice simulation
+
+    The returned dict repackages this into the repo-wide model-facing
+    convention (the Liesel model and the bayesm ncomp = 1 arm both expect a
+    centred Z WITHOUT an intercept column plus a separate population mean):
+    "Z" holds only the centred demographic columns, TRUE_MU (P,) is the
+    intercept row of Delta, TRUE_DELTA (n_demos, P) the demographic rows,
+    TRUE_SIGMA (P, P) is V_beta. Because the demographic columns are centred,
+    the intercept row of Delta IS the population mean of beta — the two
+    parametrizations are identical. There is one component, so no ground-truth
+    key carries a component axis or a _k suffix.
 
     Returns a dict with X, y, Z, unit_idx, dims, and all TRUE_ ground truth.
     """
@@ -199,27 +211,31 @@ def generate_standard_simulated_data(n_units=300, n_obs=50, n_alts=4,
     n_continuous = n_params - n_ascs
 
     # ------------------------------------------------------------------
-    # Demographics — column-wise centred, no intercept  (Rossi §5.5)
+    # Covariates Z (Rossi §5.2.1) — first column an UNCENTRED intercept of
+    # ones; demographic columns column-centred
     # ------------------------------------------------------------------
-    Z  = np.random.normal(0, 1, size=(n_units, n_demos))
-    Z -= Z.mean(axis=0)
+    z_demos  = np.random.normal(0, 1, size=(n_units, n_demos))
+    z_demos -= z_demos.mean(axis=0)
+    Z = np.column_stack([np.ones(n_units), z_demos])     # (m, n_z), n_z = 1 + n_demos
 
     # ------------------------------------------------------------------
-    # Ground truth — drawn, single component
+    # Ground truth — drawn;  B = Z Delta + U,  u_i ~ N(0, V_beta)  (5.2.1)
     # ------------------------------------------------------------------
     A_MU = 0.01                # Rossi §5.4 diffuse prior constant (bayesm's Amu);
                                 # recorded for provenance only, not used to draw truth.
-    MU_TRUTH_SD = 1.0           # truth-generating scale (see docstring); deliberately
-                                # decoupled from A_MU's diffuse-prior scale.
+    MU_TRUTH_SD    = 1.0        # truth-generating scale of Delta's intercept row (see
+                                # docstring); deliberately decoupled from A_MU's
+                                # diffuse-prior scale.
+    DELTA_TRUTH_SD = 0.5        # truth-generating scale of Delta's demographic rows.
 
-    true_mu    = np.random.normal(0.0, MU_TRUTH_SD, size=n_params)
-    Delta_true = np.random.normal(0, 0.5, size=(n_demos, n_params))
-    true_Sigma = np.diag(np.random.uniform(0.5, 2.0, n_params))
+    Delta_true = np.vstack([
+        np.random.normal(0.0, MU_TRUTH_SD,    size=(1, n_params)),
+        np.random.normal(0.0, DELTA_TRUTH_SD, size=(n_demos, n_params)),
+    ])                                                    # (n_z, p)
+    V_beta = np.diag(np.random.uniform(0.5, 2.0, n_params))
 
-    beta_true = np.zeros((n_units, n_params))
-    for i in range(n_units):
-        mu_i = true_mu + Z[i] @ Delta_true
-        beta_true[i] = np.random.multivariate_normal(mu_i, true_Sigma)
+    U = np.random.multivariate_normal(np.zeros(n_params), V_beta, size=n_units)
+    beta_true = Z @ Delta_true + U                        # B = Z Delta + U
 
     # ------------------------------------------------------------------
     # Design matrix X
@@ -273,7 +289,7 @@ def generate_standard_simulated_data(n_units=300, n_obs=50, n_alts=4,
     return {
         "X":           jnp.array(X_list),
         "y":           jnp.array(y_list),
-        "Z":           jnp.array(Z),
+        "Z":           jnp.array(z_demos),      # model-facing: centred, no intercept
         "unit_idx":    jnp.array(unit_idx_list),
         "n_units":     n_units,
         "n_params":    n_params,
@@ -282,12 +298,13 @@ def generate_standard_simulated_data(n_units=300, n_obs=50, n_alts=4,
         "K":           1,
         "param_names": param_names,
         "demo_names":  demo_names,
-        "TRUE_MU":     true_mu,
-        "TRUE_DELTA":  Delta_true,
-        "TRUE_SIGMA":  true_Sigma,
+        "TRUE_MU":     Delta_true[0],           # intercept row of Delta = population mean
+        "TRUE_DELTA":  Delta_true[1:],          # demographic rows of Delta
+        "TRUE_SIGMA":  V_beta,
         "TRUE_BETA":   beta_true,
         "DGP_A_MU":    float(A_MU),
-        "DGP_MU_TRUTH_SD": float(MU_TRUTH_SD),
+        "DGP_MU_TRUTH_SD":    float(MU_TRUTH_SD),
+        "DGP_DELTA_TRUTH_SD": float(DELTA_TRUTH_SD),
     }
 
 
