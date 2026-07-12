@@ -18,8 +18,8 @@ they fall back to assuming K == K_true (the correctly-specified case).
 Plain (non-K-indexed) counterparts - summarize_mu, plot_mu_diagnostics,
 plot_cholesky_trace, recover_covariance_matrix - serve the standard
 (single-component) HBMNL model, where posterior arrays have no component axis
-at all. Delta and beta_i diagnostics are already component-axis-free and are
-shared by both models unchanged.
+at all. Delta and beta_i diagnostics have no component axis and are shared by
+both models.
 """
 
 import jax
@@ -774,9 +774,9 @@ def _sigma_from_latent(latent):                      # (C,S,K,n_latent) -> (C,S,
 
 def invariant_convergence_summary(posterior_samples, include_cov=True):
     """
-    R-hat and ESS for LABEL-INVARIANT functionals — the honest convergence check
-    for a mixture, since per-component R-hat is meaningless under label switching.
-    Arrays expected shape (chains, draws, ...).
+    R-hat and ESS for LABEL-INVARIANT functionals — the appropriate convergence
+    check for a mixture, since per-component R-hat is meaningless under label
+    switching. Arrays expected shape (chains, draws, ...).
     """
     mu   = np.asarray(posterior_samples["mu_k"])     # (C,S,K,P)
     pvec = _recover_pvec(posterior_samples)          # (C,S,K)

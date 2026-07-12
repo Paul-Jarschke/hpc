@@ -53,13 +53,16 @@ TABLE_NAMES = ("runs", "ecr_report", "weights", "pvec_means", "convergence", "mo
 # --------------------------------------------------------------------------- #
 # In-memory model + component matching
 # --------------------------------------------------------------------------- #
-def build_model(post, name):
-    """Replicate marginal_comparison.load_sampler from an in-memory posterior dict."""
+def build_model(post, name, duration_s=None):
+    """Replicate marginal_comparison.load_sampler from an in-memory posterior dict.
+    duration_s (the fit's total wall-clock, incl. warmup) rides along so
+    marginal_comparison.functional_diagnostics can report ESS_bulk/s and ESS_tail/s."""
     mu = np.asarray(post["mu_k"])
     pvec = np.asarray(analysis._recover_pvec(post))
     Sigma = np.asarray(analysis._sigma_from_latent(np.asarray(post["sigma_inv_chol_k_latent"])))
     std = np.sqrt(np.clip(np.diagonal(Sigma, axis1=3, axis2=4), 0.0, None))
-    return {"name": name, "mu": mu, "pvec": pvec, "Sigma": Sigma, "std": std, "is_mcmc": True}
+    return {"name": name, "mu": mu, "pvec": pvec, "Sigma": Sigma, "std": std,
+            "is_mcmc": True, "duration_s": duration_s}
 
 
 def _match_components(post_mu_mean, true_mu, K_true):
@@ -403,7 +406,7 @@ def per_run_tables(post, meta, truth, diag=None):
     tables["convergence"] = crows
 
     # mixture moments (Rossi 5.5.2) vs true.
-    model = build_model(post, cond["sampler"])
+    model = build_model(post, cond["sampler"], duration_s=meta.get("runtime_s"))
     mean, var = mc.mixture_moments(model)
     tmean, tvar = mc.mixture_moments(mc.true_dgp_model(truth))
     tables["moments"] = [{**cond, "param": param_names[j], "mix_mean": float(mean[j]),
@@ -434,21 +437,23 @@ def per_run_tables(post, meta, truth, diag=None):
         "full":      mc.build_grids_full([model], true_model, n_grid=1000, n_sigma=6),
         "chebyshev": mc.build_grids_chebyshev([model], true_model, n_grid=1000, k=5.0),
     }
-    mdist, mdiag = [], []
+    mdist = []
     for grid_name, grids in grid_scenarios.items():
         for (_, param), r in mc.distance_table([model], true_model, grids, param_names).iterrows():
             mdist.append({**cond, "grid": grid_name, "param": param, **r.to_dict()})
-        # label-invariant ESS / R-hat of the marginal density series (Eq. 5.5.19) over the
-        # high-density region of this grid, computed on the real (chains, draws) via arviz.
-        for param, r in mc.density_series_diagnostics(model, grids, param_names).iterrows():
-            mdiag.append({**cond, "grid": grid_name, "param": param, "kind": "density",
-                          **r.to_dict()})
     tables["marginal_distances"] = mdist
 
-    # mixture-moment series (Eq. 5.5.2) diagnostics are grid-independent: one pass.
-    for (param, moment), r in mc.moment_series_diagnostics(model, param_names).iterrows():
-        mdiag.append({**cond, "grid": "moments", "param": param, "kind": f"moment_{moment}",
-                      **r.to_dict()})
+    # marginal convergence: Goose-identical arviz diagnostics on grid-free functionals
+    # of each per-draw label-invariant marginal (Rossi Eq. 5.5.19). functional_diagnostics
+    # gives rank split-R-hat (Rhat) plus bulk/tail ESS (ESS_bulk, ESS_tail) - the exact
+    # calls in liesel.goose.summary_m - for the mean, sd and q05/q50/q95 of every marginal;
+    # ESS_bulk/s and ESS_tail/s (effective draws per fit-second) come from the run's
+    # wall-clock, carried on `model` via build_model(duration_s=runtime_s). One grid-free
+    # pass, so no `grid` column here (contrast marginal_distances). Replaces the former
+    # density_series_diagnostics / moment_series_diagnostics rhat/ess tables.
+    mdiag = []
+    for (param, functional), r in mc.functional_diagnostics(model, param_names).iterrows():
+        mdiag.append({**cond, "param": param, "functional": functional, **r.to_dict()})
     tables["marginal_diagnostics"] = mdiag
 
     return tables, model

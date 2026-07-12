@@ -2,25 +2,25 @@
 ECR.iterative.1 relabeling for the mixture HBMNL posterior (Papastamoulis &
 Iliopoulos 2010; Papastamoulis 2016, JSS - the `label.switching` R package).
 
-This module is ADDITIVE: it never mutates the saved draws and never changes any
-existing analysis code. It returns a relabeled COPY of the posterior plus a report.
+Returns a relabeled COPY of the posterior plus a report; the input draws are
+never mutated.
 
 Why ECR.iterative.1 (of the three ECR variants in label.switching)
 ------------------------------------------------------------------
 `label.switching` offers `ecr` (needs a pivot), `ecr.iterative.1` (pivot-free,
 uses the hard allocation matrix z) and `ecr.iterative.2` (pivot-free, uses the
-m x n x K classification-probability array p). For this study, up to K=5:
+m x n x K classification-probability array p).
 
-  * `ecr` is rejected: its pivot allocation is not robust when independent
-    chains have collapsed to different, incompatible pivots.
-  * `ecr.iterative.1` is chosen: pivot-free, and it works on the HARD allocations
-    z = argmax_k r_{ik}. Because Liesel marginalizes the allocations, we have to
-    RECONSTRUCT responsibilities post-hoc anyway; hard allocations are far more
-    robust to the noise in that reconstruction than the full soft p that
-    `ecr.iterative.2` would consume. It is also the simplest of the three.
-  * Overspecified K_MODEL>K_TRUE is handled for free: collapsed (empty) components
-    claim essentially no observations, so they never compete for a real
-    component's slot - no special casing, no mass weighting.
+  * `ecr`: its pivot allocation is not robust when independent chains have
+    collapsed to different, incompatible pivots.
+  * `ecr.iterative.1` (used here): pivot-free, and it works on the HARD
+    allocations z = argmax_k r_{ik}. Liesel marginalizes the allocations, so
+    responsibilities must be RECONSTRUCTED post-hoc; hard allocations are far
+    more robust to the noise in that reconstruction than the full soft p that
+    `ecr.iterative.2` consumes. It is also the simplest of the three.
+  * Overspecified K_MODEL > K_TRUE needs no special casing: collapsed (empty)
+    components claim essentially no observations, so they never compete for a
+    real component's slot.
 
 The algorithm (faithful to the package)
 ---------------------------------------
@@ -38,19 +38,19 @@ Reconstructing the allocations (Rossi Eq. 5.5.19)
 -------------------------------------------------
 The household-specific component mean is mu_k + Z_i @ Delta (Z@Delta MUST be
 included). Responsibilities r_{tik} ∝ pvec_{tk} * N(beta_{ti} ; mu_{tk}+Z_i Delta_t,
-Sigma_{tk}); z[t,i] = argmax_k r_{tik}. This is identical for NUTS, HMC and bayesm
-(bayesm's own z is deliberately ignored so one method serves all three).
+Sigma_{tk}); z[t,i] = argmax_k r_{tik}. The same reconstruction serves NUTS, HMC
+and bayesm alike (bayesm's own sampled z is ignored so one method covers all three).
 
 What is and isn't fixed
 -----------------------
 Relabeling removes PERMUTATION ambiguity (one mode). It cannot remove genuine
 MULTIMODALITY (chains in different partition modes of the mixture weight
-posterior). The report classifies the outcome honestly. Component-level recovery
-is illustrative-only; the load-bearing inference is on the label-invariant
+posterior); the report distinguishes the two. Component-level recovery is
+illustrative-only; the load-bearing inference is on the label-invariant
 functionals (analysis.invariant_convergence_summary), which relabeling leaves
 mathematically unchanged.
 
-Dependency-free: numpy, scipy, arviz only (no scikit-learn).
+Dependencies: numpy, scipy, arviz only.
 """
 
 import numpy as np
@@ -251,7 +251,7 @@ def relabel_run(posterior_samples, K, Z=None, K_true=None, maxiter=100):
 
 
 # --------------------------------------------------------------------------- #
-# 4. Diagnostics (before / after) and an honest verdict
+# 4. Diagnostics (before / after) and outcome classification
 # --------------------------------------------------------------------------- #
 def component_convergence_table(posterior_samples, K, K_true=None, label="", all_slots=True):
     """Per-component R-hat AND ESS on raw mu_k[...,k,p] and pvec[...,k].
@@ -338,7 +338,7 @@ def invariance_guard(before_samples, after_samples, atol=1e-6):
 
 
 def classify_outcome(report, gate_df, rhat_thresh=1.1):
-    """Honest 3-way verdict using the label-INVARIANT gate + the switching rate.
+    """Three-way verdict using the label-INVARIANT gate + the switching rate.
 
     MULTIMODAL : invariant sorted-pvec R-hat is high -> different partition modes;
                  sorting already removed labels, so it is not a label artifact and

@@ -52,13 +52,16 @@ TABLE_NAMES = ("runs", "convergence", "moments", "mu_recovery", "sigma_recovery"
 # In-memory model packaging (K=1 component axis, pvec == 1), mirroring
 # marginal_comparison.load_sampler_standard for an in-memory posterior dict.
 # --------------------------------------------------------------------------- #
-def build_model_standard(post, name):
+def build_model_standard(post, name, duration_s=None):
+    """duration_s (the fit's total wall-clock, incl. warmup) rides along so
+    marginal_comparison.functional_diagnostics can report ESS_bulk/s and ESS_tail/s."""
     mu = np.asarray(post["mu"])[:, :, None, :]                                   # (C,S,1,P)
     Sigma = np.asarray(analysis._sigma_from_latent(
         np.asarray(post["sigma_inv_chol_latent"])[:, :, None, :]))               # (C,S,1,P,P)
     std = np.sqrt(np.clip(np.diagonal(Sigma, axis1=3, axis2=4), 0.0, None))      # (C,S,1,P)
     pvec = np.ones(mu.shape[:3])                                                 # (C,S,1)
-    return {"name": name, "mu": mu, "pvec": pvec, "Sigma": Sigma, "std": std, "is_mcmc": True}
+    return {"name": name, "mu": mu, "pvec": pvec, "Sigma": Sigma, "std": std,
+            "is_mcmc": True, "duration_s": duration_s}
 
 
 # --------------------------------------------------------------------------- #
@@ -174,7 +177,7 @@ def per_run_tables(post, meta, truth, diag=None):
     demo_names = list(truth.get("demo_names", [f"z{d + 1}" for d in range(D)]))
     tables = {}
 
-    model = build_model_standard(post, cond["sampler"])
+    model = build_model_standard(post, cond["sampler"], duration_s=meta.get("runtime_s"))
 
     # convergence first, so its rollup can ride along in the runs row.
     crows = convergence_rows(post, model, cond, param_names, demo_names)
@@ -216,17 +219,20 @@ def per_run_tables(post, meta, truth, diag=None):
         "full":      mc.build_grids_full([model], true_model, n_grid=1000, n_sigma=6),
         "chebyshev": mc.build_grids_chebyshev([model], true_model, n_grid=1000, k=5.0),
     }
-    mdist, mdiag = [], []
+    mdist = []
     for grid_name, grids in grid_scenarios.items():
         for (_, param), r in mc.distance_table([model], true_model, grids, param_names).iterrows():
             mdist.append({**cond, "grid": grid_name, "param": param, **r.to_dict()})
-        for param, r in mc.density_series_diagnostics(model, grids, param_names).iterrows():
-            mdiag.append({**cond, "grid": grid_name, "param": param, "kind": "density",
-                          **r.to_dict()})
     tables["marginal_distances"] = mdist
-    for (param, moment), r in mc.moment_series_diagnostics(model, param_names).iterrows():
-        mdiag.append({**cond, "grid": "moments", "param": param, "kind": f"moment_{moment}",
-                      **r.to_dict()})
+
+    # marginal convergence: Goose-identical arviz diagnostics on grid-free functionals
+    # (mean, sd, q05/q50/q95) of each per-draw marginal N(mu, Sigma). Rhat is rank split-
+    # R-hat; ESS_bulk / ESS_tail the bulk/tail ESS; ESS_bulk/s and ESS_tail/s the effective
+    # draws per fit-second (from runtime_s via build_model_standard). Replaces the former
+    # density_series_diagnostics / moment_series_diagnostics rhat/ess tables.
+    mdiag = []
+    for (param, functional), r in mc.functional_diagnostics(model, param_names).iterrows():
+        mdiag.append({**cond, "param": param, "functional": functional, **r.to_dict()})
     tables["marginal_diagnostics"] = mdiag
 
     return tables, model
