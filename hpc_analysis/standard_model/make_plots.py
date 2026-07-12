@@ -21,7 +21,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from plot_recovery import (  # noqa: E402
     save,
+    load_recovery,
     compute_beta_correlation,
+    compute_beta_post_std,
     delta_bias_faceted_by_element,
     delta_sd_faceted_by_element,
     delta_rmse_faceted_by_element,
@@ -29,6 +31,8 @@ from plot_recovery import (  # noqa: E402
     mu_bias_by_param,
     mu_coverage_by_param,
     sigma_bias_faceted_by_element,
+    beta_bias_by_param,
+    beta_sd_by_param,
     beta_rmse_by_param,
     beta_correlation_by_param,
     beta_coverage_by_param,
@@ -71,12 +75,23 @@ def main():
     # Runtime: all samplers in one figure (log scale).
     save(runtime_by_sampler(CHAINS), f"runtime/plots/runtime_by_sampler_c{CHAINS}.png")
 
+    # Beta bias: 1x4 parameter grid, signed error distribution over seeds, 0 reference.
+    save(beta_bias_by_param(CHAINS), f"beta/bias/plots/beta_bias_c{CHAINS}.png")
+
     # Beta RMSE: 1x4 parameter grid, distribution over seeds.
     save(beta_rmse_by_param(CHAINS), f"beta/rmse/plots/beta_rmse_c{CHAINS}.png")
 
-    # Beta correlation: load beta_summary once (large).
-    print("computing beta correlations from beta_summary.csv ...")
-    corr_df = compute_beta_correlation()
+    # Beta posterior SD and correlation both derive from beta_summary.csv (large),
+    # so load it once and feed both.
+    print("loading beta_summary.csv for posterior SD + correlation plots ...")
+    df_summary = load_recovery("beta_summary")
+
+    # Beta posterior SD: mean over units of post_std, 1x4 parameter grid over seeds.
+    sd_df = compute_beta_post_std(df_summary)
+    save(beta_sd_by_param(CHAINS, sd_df=sd_df), f"beta/sd/plots/beta_sd_c{CHAINS}.png")
+
+    # Beta correlation.
+    corr_df = compute_beta_correlation(df_summary)
     save(beta_correlation_by_param(CHAINS, corr_df=corr_df),
          f"beta/correlation/plots/beta_correlation_c{CHAINS}.png")
 

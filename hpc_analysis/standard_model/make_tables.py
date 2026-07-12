@@ -23,7 +23,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import plot_recovery as pr  # noqa: E402  (module ref so DIR_FIG stays patchable)
 from plot_recovery import (  # noqa: E402
     load_recovery, delta_element_label, sigma_element_label, compute_beta_correlation,
-    MARGINAL_METRICS,
+    compute_beta_post_std, MARGINAL_METRICS,
 )
 import marginal_diag  # noqa: E402
 
@@ -151,32 +151,35 @@ def delta_coverage_table(n_chains: int = CHAINS) -> pd.DataFrame:
 
 
 def delta_rmse_summary_table(n_chains: int = CHAINS) -> pd.DataFrame:
-    """Distribution of absolute error |post_mean - true_value| for every Delta element.
+    """RMSE of every Delta element across the replicate seeds, by sampler.
 
-    For each (element, sampler) cell the statistics summarize |bias| values
-    across all replicate seeds. Unlike the bias table (which reports the mean signed
-    error and its MCSE), this captures the typical magnitude of error regardless of
-    direction, matching what is shown in the RMSE boxplots.
+    Delta is a POPULATION parameter: each element has a single point estimate per run,
+    so - unlike beta (RMSE over the 300 units) - the error cannot be root-mean-squared
+    within a run. The RMSE here is the Monte-Carlo RMSE of the estimator, taken across
+    the n_sim replicate datasets:
+
+        rmse = sqrt(mean_seeds((post_mean - true_value)^2))
+
+    which decomposes exactly as rmse^2 = bias^2 + error_sd^2 (both reported; error_sd is
+    the population SD of the signed error over seeds, ddof=0). mean_abs_error is kept for
+    reference (it is what the previous version of this table reported).
 
     Returns a tidy long DataFrame:
         rows    = (element, sampler)
-        columns = min, q1, mean, median, q3, max, n_sim
+        columns = rmse, bias, error_sd, mean_abs_error, n_sim
     """
     df = load_recovery("delta")
     df = df[df["n_chains"] == n_chains].copy()
     df["element"] = df.apply(lambda r: delta_element_label(r["demo"], r["param"]), axis=1)
-    df["abs_error"] = df["bias"].abs()
 
     def _agg(g):
-        a = g["abs_error"]
+        e = g["bias"]  # signed error post_mean - true_value, one per seed
         return pd.Series({
-            "min":    a.min(),
-            "q1":     a.quantile(0.25),
-            "mean":   a.mean(),
-            "median": a.median(),
-            "q3":     a.quantile(0.75),
-            "max":    a.max(),
-            "n_sim":  len(a),
+            "rmse":           np.sqrt((e ** 2).mean()),
+            "bias":           e.mean(),
+            "error_sd":       e.std(ddof=0),
+            "mean_abs_error": e.abs().mean(),
+            "n_sim":          len(e),
         })
 
     agg = (
@@ -188,9 +191,9 @@ def delta_rmse_summary_table(n_chains: int = CHAINS) -> pd.DataFrame:
     agg["sampler"] = pd.Categorical(agg["sampler"], categories=samplers_present, ordered=True)
     agg["sampler"] = agg["sampler"].map(SAMPLER_LABELS)
     agg = agg.sort_values(["element", "sampler"])
-    stat_cols = ["min", "q1", "mean", "median", "q3", "max"]
-    agg[stat_cols] = agg[stat_cols].round(4)
-    return agg[["element", "sampler", *stat_cols, "n_sim"]].reset_index(drop=True)
+    val_cols = ["rmse", "bias", "error_sd", "mean_abs_error"]
+    agg[val_cols] = agg[val_cols].round(4)
+    return agg[["element", "sampler", *val_cols, "n_sim"]].reset_index(drop=True)
 
 
 def delta_bias_mcse_table(n_chains: int = CHAINS) -> pd.DataFrame:
@@ -235,6 +238,95 @@ def delta_bias_mcse_table(n_chains: int = CHAINS) -> pd.DataFrame:
     wide = wide.round(4)
     wide.columns = [f"{metric}_{SAMPLER_LABELS.get(s, s)}" for metric, s in wide.columns]
     return wide.reset_index()
+
+
+def beta_bias_mcse_table(n_chains: int = CHAINS) -> pd.DataFrame:
+    """Bias and Monte Carlo SE for each beta parameter, by sampler.
+
+    beta_recovery.csv already stores, per run, the signed `bias` = mean over the N
+    decision units of (post_mean_i - true_i) for each parameter. For each
+    (param, sampler) cell across n_sim replicate seeds this reports:
+        bias = mean(per-run bias)
+        mcse = std(per-run bias) / sqrt(n_sim)   [SE of the bias estimate]
+    the beta counterpart of delta_bias_mcse_table (per-param rather than per-element).
+
+    Returns a wide DataFrame:
+        rows    = param
+        columns = one (bias, mcse, n_sim) triple per sampler
+    """
+    df = load_recovery("beta")
+    df = df[df["n_chains"] == n_chains].copy()
+
+    def _agg(g):
+        b = g["bias"]
+        n = len(b)
+        return pd.Series({
+            "bias":  b.mean(),
+            "mcse":  b.std(ddof=1) / np.sqrt(n),
+            "n_sim": n,
+        })
+
+    agg = (
+        df.groupby(["param", "sampler"], observed=True)
+        .apply(_agg, include_groups=False)
+        .reset_index()
+    )
+
+    # Wide format: one (bias, mcse, n_sim) triple per sampler, params in canonical order.
+    wide = agg.pivot_table(index="param", columns="sampler",
+                           values=["bias", "mcse", "n_sim"])
+    samplers = [s for s in SAMPLER_ORDER if s in agg["sampler"].unique()]
+    wide = wide.reindex(columns=pd.MultiIndex.from_product([["bias", "mcse", "n_sim"], samplers]))
+    wide = wide.round(4)
+    wide.columns = [f"{metric}_{SAMPLER_LABELS.get(s, s)}" for metric, s in wide.columns]
+    params_present = [p for p in _PARAM_ORDER if p in wide.index]
+    wide = wide.reindex(params_present)
+    return wide.reset_index()
+
+
+def beta_sd_summary_table(n_chains: int = CHAINS, sd_df=None) -> pd.DataFrame:
+    """Distribution of the mean posterior SD of beta_i, per parameter and sampler.
+
+    From compute_beta_post_std: per run, the mean over the N units of post_std for each
+    parameter. For each (param, sampler) cell the statistics summarize those per-run mean
+    SDs across replicate seeds - how tightly (and how consistently) each sampler pins down
+    individual coefficients. The beta counterpart of delta_sd_summary_table.
+
+    Returns a tidy long DataFrame:
+        rows    = (param, sampler)
+        columns = min, q1, mean, median, q3, max, n_sim
+    """
+    if sd_df is None:
+        print("loading beta_summary.csv to compute posterior SDs ...")
+        sd_df = compute_beta_post_std()
+    df = sd_df[sd_df["n_chains"] == n_chains].copy()
+
+    def _agg(g):
+        s = g["mean_post_std"]
+        return pd.Series({
+            "min":    s.min(),
+            "q1":     s.quantile(0.25),
+            "mean":   s.mean(),
+            "median": s.median(),
+            "q3":     s.quantile(0.75),
+            "max":    s.max(),
+            "n_sim":  len(s),
+        })
+
+    agg = (
+        df.groupby(["param", "sampler"], observed=True)
+        .apply(_agg, include_groups=False)
+        .reset_index()
+    )
+    samplers_present = [s for s in SAMPLER_ORDER if s in agg["sampler"].unique()]
+    params_present = [p for p in _PARAM_ORDER if p in agg["param"].unique()]
+    agg["sampler"] = pd.Categorical(agg["sampler"], categories=samplers_present, ordered=True)
+    agg["param"] = pd.Categorical(agg["param"], categories=params_present, ordered=True)
+    agg["sampler"] = agg["sampler"].map(SAMPLER_LABELS)
+    agg = agg.sort_values(["param", "sampler"])
+    stat_cols = ["min", "q1", "mean", "median", "q3", "max"]
+    agg[stat_cols] = agg[stat_cols].round(4)
+    return agg[["param", "sampler", *stat_cols, "n_sim"]].reset_index(drop=True)
 
 
 def beta_rmse_summary_table(n_chains: int = CHAINS) -> pd.DataFrame:
@@ -549,6 +641,8 @@ def main():
     out_delta_rmse     = pr.DIR_FIG / "delta" / "rmse"     / "tables"
     out_delta_coverage = pr.DIR_FIG / "delta" / "coverage" / "tables"
     out_runtime        = pr.DIR_FIG / "runtime" / "tables"
+    out_beta_bias        = pr.DIR_FIG / "beta" / "bias"        / "tables"
+    out_beta_sd          = pr.DIR_FIG / "beta" / "sd"          / "tables"
     out_beta_rmse        = pr.DIR_FIG / "beta" / "rmse"        / "tables"
     out_beta_correlation = pr.DIR_FIG / "beta" / "correlation" / "tables"
     out_beta_coverage    = pr.DIR_FIG / "beta" / "coverage"    / "tables"
@@ -557,8 +651,8 @@ def main():
     out_marginal = pr.DIR_FIG / "marginal_comparison"   # per-grid subfolder added below
 
     for d in (out_delta_bias, out_delta_sd, out_delta_rmse, out_delta_coverage,
-              out_runtime, out_beta_rmse, out_beta_correlation, out_beta_coverage,
-              out_mu, out_sigma):
+              out_runtime, out_beta_bias, out_beta_sd, out_beta_rmse,
+              out_beta_correlation, out_beta_coverage, out_mu, out_sigma):
         d.mkdir(parents=True, exist_ok=True)
 
     # --- Delta bias / MCSE table ---
@@ -591,15 +685,30 @@ def main():
     rt.to_csv(path, index=False)
     print(f"wrote {len(rt)} rows -> {path}")
 
+    # --- Beta bias / MCSE table ---
+    bbias = beta_bias_mcse_table()
+    path = out_beta_bias / f"beta_bias_mcse_c{CHAINS}.csv"
+    bbias.to_csv(path, index=False)
+    print(f"wrote {len(bbias)} rows -> {path}")
+
+    # --- Beta posterior SD table (from beta_summary; the frame is reused for the
+    # correlation table below so the large CSV is loaded only once). ---
+    print("loading beta_summary.csv to compute posterior SDs + correlations ...")
+    df_summary = load_recovery("beta_summary")
+    sd_df = compute_beta_post_std(df_summary)
+    bsd = beta_sd_summary_table(sd_df=sd_df)
+    path = out_beta_sd / f"beta_sd_summary_c{CHAINS}.csv"
+    bsd.to_csv(path, index=False)
+    print(f"wrote {len(bsd)} rows -> {path}")
+
     # --- Beta RMSE table ---
     brmse = beta_rmse_summary_table()
     path = out_beta_rmse / f"beta_rmse_summary_c{CHAINS}.csv"
     brmse.to_csv(path, index=False)
     print(f"wrote {len(brmse)} rows -> {path}")
 
-    # --- Beta correlation table (loads beta_summary once) ---
-    print("loading beta_summary.csv to compute correlations ...")
-    corr_df = compute_beta_correlation()
+    # --- Beta correlation table (reuses the beta_summary loaded above) ---
+    corr_df = compute_beta_correlation(df_summary)
     bcorr = beta_correlation_summary_table(corr_df=corr_df)
     path = out_beta_correlation / f"beta_correlation_summary_c{CHAINS}.csv"
     bcorr.to_csv(path, index=False)

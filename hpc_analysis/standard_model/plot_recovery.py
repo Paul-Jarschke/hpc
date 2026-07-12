@@ -440,47 +440,55 @@ def delta_sd_faceted_by_element(n_chains: int = 2, df=None, *, jitter: bool = Tr
     return p
 
 
-def delta_rmse_faceted_by_element(n_chains: int = 2, df=None, *, jitter: bool = True) -> ggplot:
-    """Absolute error |post_mean - true_value| of Delta per element in a 4x2 grid.
+def delta_rmse_faceted_by_element(n_chains: int = 2, df=None) -> ggplot:
+    """RMSE of each Delta element across the replicate seeds, per sampler, in a 4x2 grid.
 
-    Same layout as delta_bias_faceted_by_element. Each jittered point is one replicate
-    seed; the box summarizes the distribution of absolute errors across seeds.
-    Unlike bias, absolute error cannot cancel across seeds, so this directly shows
-    how large the typical estimation error is per element per sampler.
+    RMSE = sqrt(mean over seeds of (post_mean - true_value)^2). Delta is a population
+    parameter with a SINGLE estimate per run, so - unlike beta (RMSE over the 300 units,
+    which yields a per-run distribution) - the mean square is taken across the replicate
+    datasets: the Monte-Carlo RMSE of the estimator. That is one number per (element,
+    sampler), so this is a bar chart (one bar per sampler per element), not a boxplot.
+    Free y-scale per panel so small-RMSE elements are not compressed by larger ones.
     """
     df = load_recovery("delta") if df is None else df
     df = df.copy()
     df["element"] = df.apply(lambda r: delta_element_label(r["demo"], r["param"]), axis=1)
-    df["abs_error"] = df["bias"].abs()
     sub = _apply_filters(df, {"n_chains": n_chains}).copy()
     if sub.empty:
         raise ValueError(f"No delta_recovery rows for n_chains={n_chains}.")
 
-    sampler_order = [s for s in SAMPLER_ORDER if s in set(sub["sampler"])]
-    sub["sampler"] = pd.Categorical(sub["sampler"], categories=sampler_order, ordered=True)
-    element_order = (
-        sub.sort_values(["demo", "param"])["element"].drop_duplicates().tolist()
+    # Collapse each (element, sampler) cell to its Monte-Carlo RMSE over the seeds.
+    rmse = (
+        sub.groupby(["element", "demo", "param", "sampler"], observed=True)["bias"]
+        .apply(lambda e: float(np.sqrt((e ** 2).mean())))
+        .reset_index()
+        .rename(columns={"bias": "rmse"})
     )
-    sub["element"] = pd.Categorical(sub["element"], categories=element_order, ordered=True)
+
+    sampler_order = [s for s in SAMPLER_ORDER if s in set(rmse["sampler"])]
+    rmse["sampler"] = pd.Categorical(rmse["sampler"], categories=sampler_order, ordered=True)
+    element_order = (
+        rmse.sort_values(["demo", "param"])["element"].drop_duplicates().tolist()
+    )
+    rmse["element"] = pd.Categorical(rmse["element"], categories=element_order, ordered=True)
 
     counts = sub.groupby("sampler", observed=True)["data_seed"].nunique().to_dict()
     print(f"[delta_rmse_faceted_by_element] n_chains={n_chains}: seeds/sampler={counts}")
 
-    color_vals = [SAMPLER_COLORS[s] for s in sampler_order]
+    fill_vals = [SAMPLER_COLORS[s] for s in sampler_order]
 
-    p = ggplot(sub, aes(x="sampler", y="abs_error", color="sampler"))
-    if jitter:
-        p = p + geom_jitter(width=0.2, height=0, size=0.8, alpha=0.45)
-    p = (p
-         + geom_boxplot(fill="#FFFFFF00", outlier_alpha=0)
-         + facet_wrap("element", ncol=4, scales="free_y", labeller="label_value")
-         + scale_color_manual(values=color_vals, labels=[SAMPLER_LABELS.get(s, s) for s in sampler_order])
-         + scale_x_discrete(labels=[SAMPLER_LABELS.get(s, s) for s in sampler_order])
-         + labs(x="Sampler", y="|post_mean - true_value|", color="Sampler",
-                title="Absolute Error of Δ - Standard Model")
-         + theme_bw()
-         + theme(figure_size=(14, 7), axis_text_x=element_text(size=8),
-                 plot_title=element_text(size=11))
+    p = (
+        ggplot(rmse, aes(x="sampler", y="rmse", fill="sampler"))
+        + geom_col(width=0.6)
+        + facet_wrap("element", ncol=4, scales="free_y", labeller="label_value")
+        + scale_fill_manual(values=fill_vals,
+                            labels=[SAMPLER_LABELS.get(s, s) for s in sampler_order])
+        + scale_x_discrete(labels=[SAMPLER_LABELS.get(s, s) for s in sampler_order])
+        + labs(x="Sampler", y="RMSE (across seeds)", fill="Sampler",
+               title="RMSE of Δ - Standard Model")
+        + theme_bw()
+        + theme(figure_size=(14, 7), axis_text_x=element_text(size=8),
+                plot_title=element_text(size=11))
     )
     return p
 
@@ -541,14 +549,21 @@ def delta_coverage_faceted_by_element(n_chains: int = 2, df=None) -> ggplot:
 # Shared per-parameter boxplot core (beta AND mu use the same 1x4 layout).
 # ----------------------------------------------------------------------------- #
 def _param_boxplot(df: pd.DataFrame, y_col: str, y_label: str,
-                   title: str, sampler_order: list, *, jitter: bool) -> ggplot:
-    """Shared core for per-param boxplots (beta bias / rmse / mae and mu bias)."""
+                   title: str, sampler_order: list, *, jitter: bool,
+                   hline: Optional[float] = None) -> ggplot:
+    """Shared core for per-param boxplots (beta bias / rmse / mae and mu bias).
+
+    `hline` draws a dashed reference line at that y value (e.g. 0.0 for a bias plot),
+    added behind the jitter/box so both stay visible.
+    """
     param_order = [p for p in _PARAM_ORDER if p in set(df["param"])]
     df = df.copy()
     df["param"] = pd.Categorical(df["param"], categories=param_order, ordered=True)
     color_vals = [SAMPLER_COLORS[s] for s in sampler_order]
 
     p = ggplot(df, aes(x="sampler", y=y_col, color="sampler"))
+    if hline is not None:
+        p = p + geom_hline(yintercept=hline, linetype="dashed", color="#aaaaaa")
     if jitter:
         p = p + geom_jitter(width=0.2, height=0, size=0.8, alpha=0.45)
     p = (p
@@ -590,6 +605,32 @@ def compute_beta_correlation(df_summary=None) -> pd.DataFrame:
     return corr
 
 
+def compute_beta_post_std(df_summary=None) -> pd.DataFrame:
+    """Mean posterior SD of the unit-level coefficients beta_i, per run and parameter.
+
+    The aggregated beta_recovery table drops the posterior SD (it keeps only bias / rmse /
+    coverage), so - like compute_beta_correlation - this reads beta_summary.csv (large,
+    one row per unit x param) and averages the per-unit `post_std` over the N decision
+    units. Returns one row per
+    (dataset_key, scenario, k_true, data_seed, k_model, sampler, n_chains, param)
+    with a `mean_post_std` column: how tightly, on average, the sampler pins down an
+    individual's coefficient for that parameter.
+    """
+    if df_summary is None:
+        df_summary = load_recovery("beta_summary")
+    group_cols = [
+        "dataset_key", "scenario", "k_true", "data_seed",
+        "k_model", "sampler", "n_chains", "param",
+    ]
+    out = (
+        df_summary.groupby(group_cols, observed=True)["post_std"]
+        .mean()
+        .reset_index()
+        .rename(columns={"post_std": "mean_post_std"})
+    )
+    return out
+
+
 def beta_bias_by_param(n_chains: int = 2, df=None, *, jitter: bool = True) -> ggplot:
     """Bias (mean post_mean - true_value over all units) per beta parameter.
 
@@ -605,7 +646,8 @@ def beta_bias_by_param(n_chains: int = 2, df=None, *, jitter: bool = True) -> gg
     counts = sub.groupby("sampler", observed=True)["data_seed"].nunique().to_dict()
     print(f"[beta_bias_by_param] n_chains={n_chains}: seeds/sampler={counts}")
     return _param_boxplot(sub, "bias", "Bias (post_mean - true_value)",
-                          "Beta Bias by Parameter - Standard Model", sampler_order, jitter=jitter)
+                          "Empirical Bias of β - Standard Model", sampler_order,
+                          jitter=jitter, hline=0.0)
 
 
 def beta_rmse_by_param(n_chains: int = 2, df=None, *, jitter: bool = True) -> ggplot:
@@ -624,6 +666,28 @@ def beta_rmse_by_param(n_chains: int = 2, df=None, *, jitter: bool = True) -> gg
     print(f"[beta_rmse_by_param] n_chains={n_chains}: seeds/sampler={counts}")
     return _param_boxplot(sub, "rmse", "RMSE",
                           "Beta RMSE by Parameter - Standard Model", sampler_order, jitter=jitter)
+
+
+def beta_sd_by_param(n_chains: int = 2, sd_df=None, *, jitter: bool = True) -> ggplot:
+    """Mean posterior SD of beta_i (averaged over the decision units) per parameter.
+
+    Each point is one seed: the mean over units of post_std for that parameter. The box
+    summarizes the distribution across replicate seeds - the beta counterpart of
+    delta_sd_faceted_by_element, showing how tightly each sampler pins down individual
+    coefficients. Faceted by parameter (Alt1/Alt2/Alt3/Price) in a single row of 4 panels.
+    """
+    if sd_df is None:
+        print("[beta_sd_by_param] loading beta_summary to compute posterior SDs ...")
+        sd_df = compute_beta_post_std()
+    sub = _apply_filters(sd_df, {"n_chains": n_chains}).copy()
+    if sub.empty:
+        raise ValueError(f"No beta posterior-SD rows for n_chains={n_chains}.")
+    sampler_order = [s for s in SAMPLER_ORDER if s in set(sub["sampler"])]
+    sub["sampler"] = pd.Categorical(sub["sampler"], categories=sampler_order, ordered=True)
+    counts = sub.groupby("sampler", observed=True)["data_seed"].nunique().to_dict()
+    print(f"[beta_sd_by_param] n_chains={n_chains}: seeds/sampler={counts}")
+    return _param_boxplot(sub, "mean_post_std", "Mean posterior SD (over units)",
+                          "Posterior SD of β - Standard Model", sampler_order, jitter=jitter)
 
 
 def beta_correlation_by_param(n_chains: int = 2, corr_df=None, *, jitter: bool = True) -> ggplot:
@@ -919,24 +983,27 @@ def marginal_distances_faceted_by_metric(n_chains: int = 2, df=None, *,
 # Runtime.
 # ----------------------------------------------------------------------------- #
 def runtime_by_sampler(n_chains: int = 2, df: Optional[pd.DataFrame] = None, *,
-                       logy: bool = True, jitter: bool = True) -> ggplot:
-    """Wall-clock runtime per fit, by sampler. Each box pools the per-dataset runtimes
-    of one sampler over all replicate seeds. Log y by default since sampler cost can
-    span orders of magnitude. Source: runs.csv (runtime_s = the timed sampler call)."""
+                       logy: bool = False, jitter: bool = True) -> ggplot:
+    """Wall-clock runtime per fit (in MINUTES), by sampler. Each box pools the per-dataset
+    runtimes of one sampler over all replicate seeds. Linear y-axis by default (the three
+    standard-model samplers run on comparable time scales); pass logy=True to fall back to
+    a log axis if a sampler's cost spans orders of magnitude. Source: runs.csv
+    (runtime_s = the timed sampler call, converted to minutes here)."""
     df = load_recovery("runs") if df is None else df
     df = df.copy()
+    df["runtime_min"] = df["runtime_s"] / 60.0
     filters = {"n_chains": n_chains}
     sub = _apply_filters(df, filters)
     if sub.empty:
         raise ValueError(f"No runs for n_chains={n_chains}.")
     print(f"[runtime_by_sampler] n_chains={n_chains}: runs/sampler="
-          f"{sub.groupby('sampler', observed=True)['runtime_s'].count().to_dict()}")
+          f"{sub.groupby('sampler', observed=True)['runtime_min'].count().to_dict()}")
     return recovery_boxplot(
-        df, value="runtime_s", x="sampler", filters=filters,
+        df, value="runtime_min", x="sampler", filters=filters,
         hline=None, jitter=jitter, logy=logy,
         title=f"Runtime by sampler - Standard Model (n_chains={n_chains})",
         xlab="Sampler",
-        ylab="Runtime (s, log scale)" if logy else "Runtime (s)", figure_size=(7.5, 5.0),
+        ylab="Runtime (min, log scale)" if logy else "Runtime (min)", figure_size=(7.5, 5.0),
     )
 
 
