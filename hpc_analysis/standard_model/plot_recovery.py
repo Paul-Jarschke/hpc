@@ -106,17 +106,18 @@ def sigma_element_label(row: str, col: str) -> str:
     return f"Σ{str(i).translate(_SUBSCRIPTS)},{str(j).translate(_SUBSCRIPTS)} ({row}:{col})"
 
 
-# Human-readable axis labels for the value columns we commonly plot.
+# Crisp axis labels for the value columns we commonly plot. theta (θ) stands in for
+# whichever generic column (Delta/mu/Sigma/beta) is loaded; theta-hat (θ̂) = post_mean.
 VALUE_LABELS = {
-    "bias": "Bias  (post_mean - true_value)",
-    "abs_diff": "Absolute error  |post_mean - true_value|",
-    "post_std": "Posterior SD  (post_std)",
-    "post_mean": "Posterior mean",
+    "bias": "Bias (θ̂−θ)",
+    "abs_diff": "|θ̂−θ|",
+    "post_std": "SD(θ̂)",
+    "post_mean": "Mean(θ̂)",
     "rmse": "RMSE",
-    "mean_abs_err": "Mean absolute error",
-    "coverage95": "95% coverage",
+    "mean_abs_err": "MAE",
+    "coverage95": "Coverage (%)",
     "runtime_s": "Runtime (s)",
-    "n_divergent": "divergent transitions",
+    "n_divergent": "Divergences",
 }
 
 # Tables keyed by short name; what `load_recovery` reads. The first five are per-element
@@ -139,11 +140,11 @@ RECOVERY_FILES = {
 
 MARGINAL_METRICS = ["Hellinger", "KL", "JSD", "TVD", "Wasserstein1"]
 MARGINAL_METRIC_LABELS = {
-    "Hellinger": "Hellinger Distance",
-    "KL": "KL Divergence (model || true)",
-    "JSD": "Jensen-Shannon Divergence",
-    "TVD": "Total Variation Distance",
-    "Wasserstein1": "Wasserstein-1 Distance",
+    "Hellinger": "Hellinger",
+    "KL": "KL divergence",
+    "JSD": "JS divergence",
+    "TVD": "TVD",
+    "Wasserstein1": "Wasserstein W₁",
 }
 
 
@@ -388,8 +389,8 @@ def delta_bias_faceted_by_element(n_chains: int = 2, df=None, *, jitter: bool = 
          + facet_wrap("element", ncol=4, scales="free_y", labeller="label_value")
          + scale_color_manual(values=color_vals, labels=[SAMPLER_LABELS.get(s, s) for s in sampler_order])
          + scale_x_discrete(labels=[SAMPLER_LABELS.get(s, s) for s in sampler_order])
-         + labs(x="Sampler", y="Empirical Bias", color="Sampler",
-                title="Empirical Bias of Δ - Standard Model")
+         + labs(x="Sampler", y="Bias (Δ̂−Δ)", color="Sampler",
+                title="Bias of Δ - Standard Model")
          + theme_bw()
          + theme(figure_size=(14, 7), axis_text_x=element_text(size=8),
                  plot_title=element_text(size=11))
@@ -431,8 +432,8 @@ def delta_sd_faceted_by_element(n_chains: int = 2, df=None, *, jitter: bool = Tr
          + facet_wrap("element", ncol=4, scales="free_y", labeller="label_value")
          + scale_color_manual(values=color_vals, labels=[SAMPLER_LABELS.get(s, s) for s in sampler_order])
          + scale_x_discrete(labels=[SAMPLER_LABELS.get(s, s) for s in sampler_order])
-         + labs(x="Sampler", y="Posterior SD", color="Sampler",
-                title="Posterior SD of Δ - Standard Model")
+         + labs(x="Sampler", y="SD(Δ̂)", color="Sampler",
+                title="SD of Δ - Standard Model")
          + theme_bw()
          + theme(figure_size=(14, 7), axis_text_x=element_text(size=8),
                  plot_title=element_text(size=11))
@@ -537,7 +538,7 @@ def delta_coverage_faceted_by_element(n_chains: int = 2, df=None) -> ggplot:
         + scale_y_continuous(breaks=[80, 85, 90, 95, 100])
         + coord_cartesian(ylim=(80, 100))
         + labs(x="Sampler", y="Coverage (%)", fill="Sampler",
-               title="Empirical 95% CI Coverage of Δ - Standard Model")
+               title="95% CI Coverage of Δ - Standard Model")
         + theme_bw()
         + theme(figure_size=(14, 7), axis_text_x=element_text(size=8),
                 plot_title=element_text(size=11))
@@ -645,8 +646,8 @@ def beta_bias_by_param(n_chains: int = 2, df=None, *, jitter: bool = True) -> gg
     sub["sampler"] = pd.Categorical(sub["sampler"], categories=sampler_order, ordered=True)
     counts = sub.groupby("sampler", observed=True)["data_seed"].nunique().to_dict()
     print(f"[beta_bias_by_param] n_chains={n_chains}: seeds/sampler={counts}")
-    return _param_boxplot(sub, "bias", "Bias (post_mean - true_value)",
-                          "Empirical Bias of β - Standard Model", sampler_order,
+    return _param_boxplot(sub, "bias", "Bias (β̂−β)",
+                          "Bias of β - Standard Model", sampler_order,
                           jitter=jitter, hline=0.0)
 
 
@@ -665,7 +666,7 @@ def beta_rmse_by_param(n_chains: int = 2, df=None, *, jitter: bool = True) -> gg
     counts = sub.groupby("sampler", observed=True)["data_seed"].nunique().to_dict()
     print(f"[beta_rmse_by_param] n_chains={n_chains}: seeds/sampler={counts}")
     return _param_boxplot(sub, "rmse", "RMSE",
-                          "Beta RMSE by Parameter - Standard Model", sampler_order, jitter=jitter)
+                          "RMSE of β by Parameter - Standard Model", sampler_order, jitter=jitter)
 
 
 def beta_sd_by_param(n_chains: int = 2, sd_df=None, *, jitter: bool = True) -> ggplot:
@@ -686,8 +687,8 @@ def beta_sd_by_param(n_chains: int = 2, sd_df=None, *, jitter: bool = True) -> g
     sub["sampler"] = pd.Categorical(sub["sampler"], categories=sampler_order, ordered=True)
     counts = sub.groupby("sampler", observed=True)["data_seed"].nunique().to_dict()
     print(f"[beta_sd_by_param] n_chains={n_chains}: seeds/sampler={counts}")
-    return _param_boxplot(sub, "mean_post_std", "Mean posterior SD (over units)",
-                          "Posterior SD of β - Standard Model", sampler_order, jitter=jitter)
+    return _param_boxplot(sub, "mean_post_std", "Mean SD(β̂) (over units)",
+                          "SD of β - Standard Model", sampler_order, jitter=jitter)
 
 
 def beta_correlation_by_param(n_chains: int = 2, corr_df=None, *, jitter: bool = True) -> ggplot:
@@ -707,8 +708,8 @@ def beta_correlation_by_param(n_chains: int = 2, corr_df=None, *, jitter: bool =
     sub["sampler"] = pd.Categorical(sub["sampler"], categories=sampler_order, ordered=True)
     counts = sub.groupby("sampler", observed=True)["data_seed"].nunique().to_dict()
     print(f"[beta_correlation_by_param] n_chains={n_chains}: seeds/sampler={counts}")
-    return _param_boxplot(sub, "correlation", "Pearson Correlation (post_mean vs true)",
-                          "Beta Correlation by Parameter - Standard Model",
+    return _param_boxplot(sub, "correlation", "r(β̂, β)",
+                          "r(β̂, β) by Parameter - Standard Model",
                           sampler_order, jitter=jitter)
 
 
@@ -745,7 +746,7 @@ def beta_coverage_by_param(n_chains: int = 2, df=None) -> ggplot:
         + scale_y_continuous(breaks=[80, 85, 90, 95, 100])
         + coord_cartesian(ylim=(80, 100))
         + labs(x="Sampler", y="Coverage (%)", fill="Sampler",
-               title="Empirical 95% CI Coverage of Beta - Standard Model")
+               title="95% CI Coverage of β - Standard Model")
         + theme_bw()
         + theme(figure_size=(12, 5), axis_text_x=element_text(size=8),
                 plot_title=element_text(size=11))
@@ -772,8 +773,8 @@ def mu_bias_by_param(n_chains: int = 2, df=None, *, jitter: bool = True) -> ggpl
     sub["sampler"] = pd.Categorical(sub["sampler"], categories=sampler_order, ordered=True)
     counts = sub.groupby("sampler", observed=True)["data_seed"].nunique().to_dict()
     print(f"[mu_bias_by_param] n_chains={n_chains}: seeds/sampler={counts}")
-    return _param_boxplot(sub, "bias", "Bias (post_mean - true_value)",
-                          "Empirical Bias of μ - Standard Model", sampler_order, jitter=jitter)
+    return _param_boxplot(sub, "bias", "Bias (μ̂−μ)",
+                          "Bias of μ - Standard Model", sampler_order, jitter=jitter)
 
 
 def mu_coverage_by_param(n_chains: int = 2, df=None) -> ggplot:
@@ -811,7 +812,7 @@ def mu_coverage_by_param(n_chains: int = 2, df=None) -> ggplot:
         + scale_y_continuous(breaks=[80, 85, 90, 95, 100])
         + coord_cartesian(ylim=(80, 100))
         + labs(x="Sampler", y="Coverage (%)", fill="Sampler",
-               title="Empirical 95% CI Coverage of μ - Standard Model")
+               title="95% CI Coverage of μ - Standard Model")
         + theme_bw()
         + theme(figure_size=(12, 5), axis_text_x=element_text(size=8),
                 plot_title=element_text(size=11))
@@ -860,8 +861,8 @@ def sigma_bias_faceted_by_element(n_chains: int = 2, df=None, *, jitter: bool = 
          + facet_wrap("element", ncol=4, scales="free_y", labeller="label_value")
          + scale_color_manual(values=color_vals, labels=[SAMPLER_LABELS.get(s, s) for s in sampler_order])
          + scale_x_discrete(labels=[SAMPLER_LABELS.get(s, s) for s in sampler_order])
-         + labs(x="Sampler", y="Error (post_mean - true_value)", color="Sampler",
-                title="Error of Posterior Σ Elements - Standard Model")
+         + labs(x="Sampler", y="Error (Σ̂−Σ)", color="Sampler",
+                title="Error of Σ Elements - Standard Model")
          + theme_bw()
          + theme(figure_size=(14, 8.5), axis_text_x=element_text(size=8),
                  plot_title=element_text(size=11))
@@ -925,7 +926,7 @@ def marginal_metric_boxplot(metric: str = "Hellinger", n_chains: int = 2,
                               labels=[SAMPLER_LABELS.get(s, s) for s in sampler_order])
          + scale_x_discrete(labels=[SAMPLER_LABELS.get(s, s) for s in sampler_order])
          + labs(x="Sampler", y=ylabel, color="Sampler",
-                title=f"{ylabel} of fitted marginal vs True DGP  (c{n_chains}, {grid} grid)")
+                title=f"{ylabel} vs True DGP (c{n_chains}, {grid} grid)")
          + theme_bw()
          + theme(figure_size=(12, 4.5), axis_text_x=element_text(size=7),
                  plot_title=element_text(size=11))
@@ -1003,7 +1004,7 @@ def runtime_by_sampler(n_chains: int = 2, df: Optional[pd.DataFrame] = None, *,
         hline=None, jitter=jitter, logy=logy,
         title=f"Runtime by sampler - Standard Model (n_chains={n_chains})",
         xlab="Sampler",
-        ylab="Runtime (min, log scale)" if logy else "Runtime (min)", figure_size=(7.5, 5.0),
+        ylab="Runtime (min, log)" if logy else "Runtime (min)", figure_size=(7.5, 5.0),
     )
 
 
@@ -1049,7 +1050,7 @@ def consolidated_rmse_boxplot(block: str, n_chains: int = 2, logy: bool = None) 
     and their jitter points line up. beta defaults to a log y-scale."""
     df = consolidated_rmse_by_run(n_chains)
     df = df[df["block"] == block].copy()
-    label = {"beta": "beta", "delta": "Delta"}[block]
+    label = {"beta": "β", "delta": "Δ"}[block]
     if logy is None:
         logy = block == "beta"
     return recovery_boxplot(

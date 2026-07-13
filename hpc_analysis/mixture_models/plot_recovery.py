@@ -91,26 +91,27 @@ def delta_element_label(demo: str, param: str) -> str:
     return f"Δ{str(d).translate(_SUBSCRIPTS)},{str(p).translate(_SUBSCRIPTS)} ({demo}:{param})"
 
 
-# Human-readable axis labels for the value columns we commonly plot.
+# Crisp axis labels for the value columns we commonly plot. theta (θ) stands in for
+# whichever generic column (Delta/mu/Sigma/beta) is loaded; theta-hat (θ̂) = post_mean.
 VALUE_LABELS = {
-    "bias": "Bias  (post_mean - true_value)",
-    "abs_diff": "Absolute error  |post_mean - true_value|",
-    "post_std": "Posterior SD  (post_std)",
-    "post_mean": "Posterior mean",
+    "bias": "Bias (θ̂−θ)",
+    "abs_diff": "|θ̂−θ|",
+    "post_std": "SD(θ̂)",
+    "post_mean": "Mean(θ̂)",
     "rmse": "RMSE",
-    "mean_abs_err": "Mean absolute error",
-    "coverage95": "95% coverage",
+    "mean_abs_err": "MAE",
+    "coverage95": "Coverage (%)",
     "runtime_s": "Runtime (s)",
-    "invariant_ess_min": "min ESS (label-invariant)",
-    "n_divergent": "divergent transitions",
+    "invariant_ess_min": "min ESS",
+    "n_divergent": "Divergences",
 }
 
-# Tables keyed by short name; what `load_recovery` reads. The first four are per-element
+# Tables keyed by short name; what `load_recovery` reads. delta/beta are per-element
 # recovery tables; the rest are per-run / per-kernel tables for direct-column boxplots.
+# No mu/sigma entries: upstream only ECR-relabels pvec now, so per-component mu_k/Sigma
+# recovery vs ground truth is no longer computed (see src/summaries.py).
 RECOVERY_FILES = {
     "delta": "delta_recovery.csv",
-    "mu": "mu_recovery.csv",
-    "sigma": "sigma_recovery.csv",
     "beta": "beta_recovery.csv",
     "beta_summary": "beta_summary.csv",
     "runs": "runs.csv",
@@ -124,11 +125,11 @@ RECOVERY_FILES = {
 
 MARGINAL_METRICS = ["Hellinger", "KL", "JSD", "TVD", "Wasserstein1"]
 MARGINAL_METRIC_LABELS = {
-    "Hellinger": "Hellinger Distance",
-    "KL": "KL Divergence (model || true)",
-    "JSD": "Jensen-Shannon Divergence",
-    "TVD": "Total Variation Distance",
-    "Wasserstein1": "Wasserstein-1 Distance",
+    "Hellinger": "Hellinger",
+    "KL": "KL divergence",
+    "JSD": "JS divergence",
+    "TVD": "TVD",
+    "Wasserstein1": "Wasserstein W₁",
 }
 
 
@@ -369,8 +370,8 @@ def delta_bias_faceted_by_element(n_chains: int = 2, k_true: int = 1,
          + facet_wrap("element", ncol=4, scales="free_y", labeller="label_value")
          + scale_color_manual(values=color_vals, labels=[SAMPLER_LABELS.get(s, s) for s in sampler_order])
          + scale_x_discrete(labels=[SAMPLER_LABELS.get(s, s) for s in sampler_order])
-         + labs(x="Sampler", y="Empirical Bias", color="Sampler",
-                title=f"Empirical Bias of Δ - {n_comp}")
+         + labs(x="Sampler", y="Bias (Δ̂−Δ)", color="Sampler",
+                title=f"Bias of Δ - {n_comp}")
          + theme_bw()
          + theme(figure_size=(14, 7), axis_text_x=element_text(size=8),
                  plot_title=element_text(size=11))
@@ -416,8 +417,8 @@ def delta_sd_faceted_by_element(n_chains: int = 2, k_true: int = 1,
          + facet_wrap("element", ncol=4, scales="free_y", labeller="label_value")
          + scale_color_manual(values=color_vals, labels=[SAMPLER_LABELS.get(s, s) for s in sampler_order])
          + scale_x_discrete(labels=[SAMPLER_LABELS.get(s, s) for s in sampler_order])
-         + labs(x="Sampler", y="Posterior SD", color="Sampler",
-                title=f"Posterior SD of Δ - {n_comp}")
+         + labs(x="Sampler", y="SD(Δ̂)", color="Sampler",
+                title=f"SD of Δ - {n_comp}")
          + theme_bw()
          + theme(figure_size=(14, 7), axis_text_x=element_text(size=8),
                  plot_title=element_text(size=11))
@@ -465,8 +466,8 @@ def delta_rmse_faceted_by_element(n_chains: int = 2, k_true: int = 1,
          + facet_wrap("element", ncol=4, scales="free_y", labeller="label_value")
          + scale_color_manual(values=color_vals, labels=[SAMPLER_LABELS.get(s, s) for s in sampler_order])
          + scale_x_discrete(labels=[SAMPLER_LABELS.get(s, s) for s in sampler_order])
-         + labs(x="Sampler", y="|post_mean - true_value|", color="Sampler",
-                title=f"Absolute Error of Δ - {n_comp}")
+         + labs(x="Sampler", y="|Δ̂−Δ|", color="Sampler",
+                title=f"|Δ̂−Δ| - {n_comp}")
          + theme_bw()
          + theme(figure_size=(14, 7), axis_text_x=element_text(size=8),
                  plot_title=element_text(size=11))
@@ -521,7 +522,7 @@ def delta_coverage_faceted_by_element(n_chains: int = 2, k_true: int = 1,
         + scale_y_continuous(breaks=[80, 85, 90, 95, 100])
         + coord_cartesian(ylim=(80, 100))
         + labs(x="Sampler", y="Coverage (%)", fill="Sampler",
-               title=f"Empirical 95% CI Coverage of Δ - {n_comp}")
+               title=f"95% CI Coverage of Δ - {n_comp}")
         + theme_bw()
         + theme(figure_size=(14, 7), axis_text_x=element_text(size=8),
                 plot_title=element_text(size=11))
@@ -567,8 +568,8 @@ def delta_coverage_by_ktrue(n_chains: int = 2, df=None) -> ggplot:
                             labels=[SAMPLER_LABELS.get(s, s) for s in sampler_order])
         + scale_y_continuous(breaks=[80, 85, 90, 95, 100])
         + coord_cartesian(ylim=(80, 100))
-        + labs(x="True Components (k_true)", y="Coverage (%)", fill="Sampler",
-               title=f"Empirical 95% CI Coverage of Δ by True Components (c{n_chains})")
+        + labs(x="k_true", y="Coverage (%)", fill="Sampler",
+               title=f"95% CI Coverage of Δ vs k_true (c{n_chains})")
         + theme_bw()
         + theme(figure_size=(14, 7), axis_text_x=element_text(size=9),
                 plot_title=element_text(size=11))
@@ -639,8 +640,8 @@ def beta_bias_by_param(n_chains: int = 2, k_true: int = 1,
     n_comp = f"{k_true} True Component" + ("s" if k_true != 1 else "")
     counts = sub.groupby("sampler", observed=True)["data_seed"].nunique().to_dict()
     print(f"[beta_bias_by_param] n_chains={n_chains} k_true={k_true}: seeds/sampler={counts}")
-    return _beta_boxplot(sub, "bias", "Bias (post_mean - true_value)",
-                         f"Beta Bias by Parameter - {n_comp}", sampler_order, jitter=jitter)
+    return _beta_boxplot(sub, "bias", "Bias (β̂−β)",
+                         f"β Bias by Parameter - {n_comp}", sampler_order, jitter=jitter)
 
 
 def beta_rmse_by_param(n_chains: int = 2, k_true: int = 1,
@@ -660,7 +661,7 @@ def beta_rmse_by_param(n_chains: int = 2, k_true: int = 1,
     counts = sub.groupby("sampler", observed=True)["data_seed"].nunique().to_dict()
     print(f"[beta_rmse_by_param] n_chains={n_chains} k_true={k_true}: seeds/sampler={counts}")
     return _beta_boxplot(sub, "rmse", "RMSE",
-                         f"Beta RMSE by Parameter - {n_comp}", sampler_order, jitter=jitter)
+                         f"β RMSE by Parameter - {n_comp}", sampler_order, jitter=jitter)
 
 
 def beta_correlation_by_param(n_chains: int = 2, k_true: int = 1,
@@ -682,8 +683,8 @@ def beta_correlation_by_param(n_chains: int = 2, k_true: int = 1,
     n_comp = f"{k_true} True Component" + ("s" if k_true != 1 else "")
     counts = sub.groupby("sampler", observed=True)["data_seed"].nunique().to_dict()
     print(f"[beta_correlation_by_param] n_chains={n_chains} k_true={k_true}: seeds/sampler={counts}")
-    return _beta_boxplot(sub, "correlation", "Pearson Correlation (post_mean vs true)",
-                         f"Beta Correlation by Parameter - {n_comp}", sampler_order, jitter=jitter)
+    return _beta_boxplot(sub, "correlation", "r(β̂, β)",
+                         f"β Correlation by Parameter - {n_comp}", sampler_order, jitter=jitter)
 
 
 def beta_correlation_by_ktrue(n_chains: int = 2, corr_df=None) -> ggplot:
@@ -715,8 +716,8 @@ def beta_correlation_by_ktrue(n_chains: int = 2, corr_df=None) -> ggplot:
         + scale_color_manual(values=color_vals,
                              labels=[SAMPLER_LABELS.get(s, s) for s in sampler_order])
         + scale_x_discrete(expand=(0, 0.4))
-        + labs(x="True Components (k_true)", y="Pearson Correlation", color="Sampler",
-               title=f"Beta Correlation (post_mean vs true) by True Components (c{n_chains})")
+        + labs(x="k_true", y="r(β̂, β)", color="Sampler",
+               title=f"β Correlation vs k_true (c{n_chains})")
         + theme_bw()
         + theme(figure_size=(12, 5), axis_text_x=element_text(size=9),
                 plot_title=element_text(size=11))
@@ -758,7 +759,7 @@ def beta_coverage_by_param(n_chains: int = 2, k_true: int = 1, df=None) -> ggplo
         + scale_y_continuous(breaks=[80, 85, 90, 95, 100])
         + coord_cartesian(ylim=(80, 100))
         + labs(x="Sampler", y="Coverage (%)", fill="Sampler",
-               title=f"Empirical 95% CI Coverage of Beta - {n_comp}")
+               title=f"95% CI Coverage of β - {n_comp}")
         + theme_bw()
         + theme(figure_size=(12, 5), axis_text_x=element_text(size=8),
                 plot_title=element_text(size=11))
@@ -799,8 +800,8 @@ def beta_coverage_by_ktrue(n_chains: int = 2, df=None) -> ggplot:
                             labels=[SAMPLER_LABELS.get(s, s) for s in sampler_order])
         + scale_y_continuous(breaks=[80, 85, 90, 95, 100])
         + coord_cartesian(ylim=(80, 100))
-        + labs(x="True Components (k_true)", y="Coverage (%)", fill="Sampler",
-               title=f"Empirical 95% CI Coverage of Beta by True Components (c{n_chains})")
+        + labs(x="k_true", y="Coverage (%)", fill="Sampler",
+               title=f"95% CI Coverage of β vs k_true (c{n_chains})")
         + theme_bw()
         + theme(figure_size=(12, 5), axis_text_x=element_text(size=9),
                 plot_title=element_text(size=11))
@@ -850,8 +851,8 @@ def marginal_distance_by_ktrue(n_chains: int = 2, metric: str = "Hellinger",
         + scale_color_manual(values=color_vals,
                              labels=[SAMPLER_LABELS.get(s, s) for s in sampler_order])
         + scale_x_discrete(expand=(0, 0.4))
-        + labs(x="True Components (k_true)", y=ylabel, color="Sampler",
-               title=f"{ylabel} by True Components (c{n_chains}, {grid} grid)")
+        + labs(x="k_true", y=ylabel, color="Sampler",
+               title=f"{ylabel} vs k_true (c{n_chains}, {grid} grid)")
         + theme_bw()
         + theme(figure_size=(12, 5), axis_text_x=element_text(size=9),
                 plot_title=element_text(size=11))
@@ -899,7 +900,7 @@ def marginal_distances_faceted_by_metric(n_chains: int = 2, k_true: int = 1,
                              labels=[SAMPLER_LABELS.get(s, s) for s in sampler_order])
         + scale_x_discrete(labels=[SAMPLER_LABELS.get(s, s) for s in sampler_order])
         + labs(x="Sampler", y="Distance", color="Sampler",
-               title=f"Marginal Distances vs True DGP - {n_comp} ({grid} grid)")
+               title=f"Distances vs True DGP - {n_comp} ({grid} grid)")
         + theme_bw()
         + theme(figure_size=(14, 12), axis_text_x=element_text(size=7),
                 plot_title=element_text(size=11))
@@ -962,7 +963,7 @@ def marginal_metric_boxplot(metric: str = "Hellinger", n_chains: int = 2,
                               labels=[SAMPLER_LABELS.get(s, s) for s in sampler_order])
          + scale_x_discrete(labels=[SAMPLER_LABELS.get(s, s) for s in sampler_order])
          + labs(x="Sampler", y=ylabel, color="Sampler",
-                title=f"{ylabel} of fitted marginal vs True DGP  (c{n_chains}, {grid} grid)")
+                title=f"{ylabel} vs True DGP (c{n_chains}, {grid} grid)")
          + theme_bw()
          + theme(figure_size=(12, 9), axis_text_x=element_text(size=7),
                  plot_title=element_text(size=11))
@@ -988,9 +989,9 @@ def runtime_samplers_by_ktrue(n_chains: int = 2, df: Optional[pd.DataFrame] = No
     return recovery_boxplot(
         df, value="runtime_s", x="k_true", color="sampler", filters=filters,
         x_order=[1, 2, 3, 5], hline=None, jitter=jitter, logy=logy,
-        title=f"Runtime by true-component count, by sampler (n_chains={n_chains})",
-        xlab="k_true  (true number of mixture components)",
-        ylab="Runtime (s, log scale)" if logy else "Runtime (s)", figure_size=(9.0, 5.5),
+        title=f"Runtime vs k_true, by sampler (c{n_chains})",
+        xlab="k_true",
+        ylab="Runtime (s, log)" if logy else "Runtime (s)", figure_size=(9.0, 5.5),
     )
 
 
@@ -1026,9 +1027,9 @@ def runtime_by_ktrue(sampler: str = "nuts", n_chains: int = 2,
     p = (p
          + geom_boxplot(fill="#FFFFFF00", color=color, outlier_alpha=0)
          + labs(
-             x="Number of mixture components",
-             y="Runtime (min.)",
-             title=f"Runtime by Number of mixture components - {label}",
+             x="k_true",
+             y="Runtime (min)",
+             title=f"Runtime vs k_true - {label}",
          )
          + theme_bw()
          + theme(figure_size=(7.5, 4.8), plot_title=element_text(size=11))
@@ -1058,7 +1059,7 @@ def runtime_by_ktrue(sampler: str = "nuts", n_chains: int = 2,
     ax2.set_yticks(hour_ticks)
     ax2.set_yticklabels([str(int(h)) for h in hour_ticks], color=tick_color)
     ax2.tick_params(axis="y", colors=tick_color)
-    ax2.set_ylabel("Runtime (h.)", color="black")
+    ax2.set_ylabel("Runtime (h)", color="black")
     ax2.grid(False)
 
     return fig
@@ -1076,8 +1077,8 @@ def runtime_plot(df: Optional[pd.DataFrame] = None, *, logy: bool = True,
     return recovery_boxplot(
         d, value="runtime_s", x="sampler", facet_wrap_by="k_true", facet_scales="fixed",
         jitter=jitter, logy=logy,
-        title="Runtime by sampler, per true-component count  (n_chains = 1)",
-        ylab="Runtime (s, log scale)" if logy else "Runtime (s)", xlab="Sampler",
+        title="Runtime by sampler vs k_true (c1)",
+        ylab="Runtime (s, log)" if logy else "Runtime (s)", xlab="Sampler",
         figure_size=(8.5, 6.0),
     )
 
@@ -1125,13 +1126,13 @@ def consolidated_rmse_boxplot(block: str, n_chains: int = 2, logy: bool = None) 
     df = consolidated_rmse_by_run(n_chains)
     df = df[df["block"] == block].copy()
     df["K_true"] = df["k_true"].astype(str)
-    label = {"beta": "beta", "delta": "Delta"}[block]
+    label = {"beta": "β", "delta": "Δ"}[block]
     if logy is None:
         logy = block == "beta"
     return recovery_boxplot(
         df, value="rmse", x="sampler", jitter=True, logy=logy,
         facet_wrap_by="K_true",
-        title=f"Consolidated {label} RMSE (all elements pooled per run) - {n_chains} chain(s)",
+        title=f"Consolidated {label} RMSE (pooled per run) - c{n_chains}",
         xlab="", ylab="RMSE (per-run, pooled)" + (" [log]" if logy else ""),
         figure_size=(10.0, 6.0),
     )

@@ -202,7 +202,7 @@ def win_rate_plot(comparison: str, tbl: pd.DataFrame, grid: str = "") -> ggplot:
         + facet_wrap("metric", ncol=5)
         + scale_color_manual(values=[PARAM_COLORS[p] for p in param_order])
         + scale_y_continuous(limits=[0, 1], breaks=[0, 0.25, 0.5, 0.75, 1.0])
-        + labs(x="True Components (k_true)", y=f"Share of datasets where {chall} < {base}",
+        + labs(x="k_true", y=f"Share of datasets where {chall} < {base}",
                color="Parameter",
                title=f"Marginal-distance win rate: {chall} vs {base} (c{CHAINS}{gtag}), by parameter")
         + theme_bw()

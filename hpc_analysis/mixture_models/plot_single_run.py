@@ -84,8 +84,8 @@ def plot_delta_bias_single_run(run_key: str = "kt1_s01__k5_nuts_c1", *,
         ggplot(df, aes("element", "bias"))
         + geom_hline(yintercept=0, linetype="dashed", color="#7f7f7f")
         + geom_point(color="#1f77b4", size=3.0)
-        + labs(x="Δ element  (demographic : parameter)",
-               y="Bias  (post_mean - true_value)",
+        + labs(x="Δ element",
+               y="Bias (Δ̂−Δ)",
                title=title)
         + theme_bw()
         + theme(figure_size=(8.5, 5.0),

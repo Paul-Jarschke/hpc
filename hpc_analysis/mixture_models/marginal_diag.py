@@ -76,11 +76,11 @@ FUNC_LABELS = {"mean": "Mean", "sd": "SD", "q05": "Q05", "q50": "Median", "q95":
 # Metric -> (axis label, log scale?, reference line). ESS/s carries no fixed target
 # (its scale is sampler-dependent), so no reference line.
 METRIC_CFG = {
-    "Rhat":           ("R-hat", False, RHAT_THRESH, "R-hat"),
-    "ESS_bulk":       ("ESS (bulk, log scale)", True, ESS_MIN, "Bulk ESS"),
-    "ESS_tail":       ("ESS (tail, log scale)", True, ESS_MIN, "Tail ESS"),
-    "ESS_bulk_per_s": ("ESS/s (bulk, log scale)", True, None, "Bulk ESS per second"),
-    "ESS_tail_per_s": ("ESS/s (tail, log scale)", True, None, "Tail ESS per second"),
+    "Rhat":           ("R̂", False, RHAT_THRESH, "R̂"),
+    "ESS_bulk":       ("ESS (bulk, log)", True, ESS_MIN, "Bulk ESS"),
+    "ESS_tail":       ("ESS (tail, log)", True, ESS_MIN, "Tail ESS"),
+    "ESS_bulk_per_s": ("ESS/s (bulk, log)", True, None, "Bulk ESS/s"),
+    "ESS_tail_per_s": ("ESS/s (tail, log)", True, None, "Tail ESS/s"),
 }
 
 DIR_OUT_BASE = DIR_FIG / "marginal_comparison"
@@ -140,8 +140,8 @@ def _diag_grid(d: pd.DataFrame, metric: str, n_chains: int) -> ggplot:
         p + facet_grid(rows="functional", cols="param", scales="free_y", labeller="label_value")
         + scale_color_manual(values=color_vals,
                              labels=[SAMPLER_LABELS.get(s, s) for s in sampler_order])
-        + labs(x="True Number of components", y=ylab, color="Sampler",
-               title=f"Marginal {mtitle} by True Components  (c{n_chains})")
+        + labs(x="k_true", y=ylab, color="Sampler",
+               title=f"Marginal {mtitle} vs k_true  (c{n_chains})")
         + theme_bw()
         + theme(figure_size=(13, 11), axis_text_x=element_text(size=8),
                 plot_title=element_text(size=11))

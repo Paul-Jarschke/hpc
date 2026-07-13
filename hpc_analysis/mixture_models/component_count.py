@@ -260,9 +260,9 @@ def plot_k_eff_by_ktrue(n_chains: int = 2, runs: Optional[pd.DataFrame] = None) 
         + geom_boxplot(width=0.6, fill="#FFFFFF00", outlier_alpha=0.35, position=dodge)
         + scale_color_manual(values=color_vals,
                              labels=[SAMPLER_LABELS.get(s, s) for s in sampler_order])
-        + labs(x="True Number of components",
-               y="Effective # components  (1 / Σ wₖ²)", color="Sampler",
-               title=f"Effective Number of Components vs Truth  (c{n_chains})")
+        + labs(x="k_true",
+               y="K_eff (1/Σwₖ²)", color="Sampler",
+               title=f"K_eff vs k_true (c{n_chains})")
         + theme_bw()
         + theme(figure_size=(9, 5), axis_text_x=element_text(size=9),
                 plot_title=element_text(size=11))
@@ -314,9 +314,9 @@ def plot_est_k_confusion(n_chains: int = 2, threshold: float = PRIMARY_THRESHOLD
         + scale_x_continuous(breaks=list(range(1, K_MODEL + 1)))
         + scale_fill_manual(values=color_vals,
                             labels=[SAMPLER_LABELS.get(s, s) for s in sampler_order])
-        + labs(x=f"Estimated # components  (weights ≥ {threshold:g})",
+        + labs(x=f"Est. # components (w ≥ {threshold:g})",
                y="Fraction of seeds", fill="Sampler",
-               title=f"Recovered Component Count by True Count  (c{n_chains}, τ={threshold:g})")
+               title=f"Recovered Count vs k_true (c{n_chains}, τ={threshold:g})")
         + theme_bw()
         + theme(figure_size=(14, 4.5), axis_text_x=element_text(size=9),
                 plot_title=element_text(size=11))
@@ -351,8 +351,8 @@ def plot_est_k_confusion_all_tau(n_chains: int = 2, thresholds: Sequence[float] 
         + scale_x_continuous(breaks=list(range(1, K_MODEL + 1)))
         + scale_fill_manual(values=color_vals,
                             labels=[SAMPLER_LABELS.get(s, s) for s in sampler_order])
-        + labs(x="Estimated # components  (weights ≥ τ)", y="Fraction of seeds", fill="Sampler",
-               title=f"Recovered Component Count by True Count and Threshold  (c{n_chains})")
+        + labs(x="Est. # components (w ≥ τ)", y="Fraction of seeds", fill="Sampler",
+               title=f"Recovered Count vs k_true and τ (c{n_chains})")
         + theme_bw()
         + theme(figure_size=(14, 8), axis_text_x=element_text(size=8),
                 plot_title=element_text(size=11))
@@ -403,9 +403,9 @@ def plot_weight_profile_by_ktrue(n_chains: int = 2, df: Optional[pd.DataFrame] =
                              labels=[SAMPLER_LABELS.get(s, s) for s in sampler_order])
         + scale_fill_manual(values=color_vals,
                             labels=[SAMPLER_LABELS.get(s, s) for s in sampler_order])
-        + labs(x="Component slot (descending weight)", y="Mean weight  (post_mean)",
+        + labs(x="Component slot (descending weight)", y="Mean weight (π̂)",
                color="Sampler", fill="Sampler",
-               title=f"Sorted Component-Weight Profile (after ECR)  (c{n_chains})")
+               title=f"Weight Profile (after ECR) (c{n_chains})")
         + theme_bw()
         + theme(figure_size=(14, 4.5), axis_text_x=element_text(size=9),
                 plot_title=element_text(size=11))
@@ -443,9 +443,9 @@ def plot_weight_profile_before_after(n_chains: int = 2,
                              labels=[SAMPLER_LABELS.get(s, s) for s in sampler_order])
         + scale_fill_manual(values=color_vals,
                             labels=[SAMPLER_LABELS.get(s, s) for s in sampler_order])
-        + labs(x="Component slot (descending weight)", y="Mean weight",
+        + labs(x="Component slot (descending weight)", y="Mean weight (π̂)",
                color="Sampler", fill="Sampler",
-               title=f"Component-Weight Profile: before vs after ECR  (c{n_chains})")
+               title=f"Weight Profile: Before vs After ECR (c{n_chains})")
         + theme_bw()
         + theme(figure_size=(10, 10), axis_text_x=element_text(size=8),
                 plot_title=element_text(size=11))

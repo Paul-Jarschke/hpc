@@ -76,11 +76,11 @@ FUNC_LABELS = {"mean": "Mean", "sd": "SD", "q05": "Q05", "q50": "Median", "q95":
 # Metric -> (axis label, log scale?, reference line, short title). ESS/s carries no fixed
 # target (its scale is sampler-dependent), so no reference line.
 METRIC_CFG = {
-    "Rhat":           ("R-hat", False, RHAT_THRESH, "R-hat"),
-    "ESS_bulk":       ("ESS (bulk, log scale)", True, ESS_MIN, "Bulk ESS"),
-    "ESS_tail":       ("ESS (tail, log scale)", True, ESS_MIN, "Tail ESS"),
-    "ESS_bulk_per_s": ("ESS/s (bulk, log scale)", True, None, "Bulk ESS per second"),
-    "ESS_tail_per_s": ("ESS/s (tail, log scale)", True, None, "Tail ESS per second"),
+    "Rhat":           ("R̂", False, RHAT_THRESH, "R̂"),
+    "ESS_bulk":       ("ESS (bulk, log)", True, ESS_MIN, "Bulk ESS"),
+    "ESS_tail":       ("ESS (tail, log)", True, ESS_MIN, "Tail ESS"),
+    "ESS_bulk_per_s": ("ESS/s (bulk, log)", True, None, "Bulk ESS/s"),
+    "ESS_tail_per_s": ("ESS/s (tail, log)", True, None, "Tail ESS/s"),
 }
 
 

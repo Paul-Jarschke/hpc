@@ -5,7 +5,7 @@ Reads every run's saved FULL posterior (<JOB_GLOB>/out[-test]/posterior_raw/*.pk
 meta.json) and re-derives every per-run tidy table via src.summaries.per_run_tables (the
 SAME code each run writes on-node), writing concatenated CSVs to data/out/<out-name>/:
 
-  runs, ecr_report, weights, pvec_means, convergence, moments, mu_recovery, sigma_recovery,
+  runs, ecr_report, weights, pvec_means, convergence, moments,
   delta_recovery, beta_recovery, beta_summary, diagnostics, marginal_distances,
   marginal_diagnostics
 

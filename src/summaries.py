@@ -13,10 +13,15 @@ moments, sampler diagnostics) is built here, so the SAME code runs two ways:
 
 This is the `summaries.py` referenced in src/README.md. The recovery math is unchanged
 from the original post_process.py; it reuses analysis.* (label-invariant convergence),
-label_switching.* (ECR.iterative.1 relabel + component convergence) and
-marginal_comparison.* (Rossi mixture moments). per_run_tables() returns the per-run
-tables plus the in-memory mixture `model` dict so the caller can run the cross-sampler
-step without rebuilding it.
+label_switching.* (ECR relabeling of pvec only - mu_k/Sigma are not relabeled; see
+label_switching.py's module docstring) and marginal_comparison.* (Rossi mixture moments).
+per_run_tables() returns the per-run tables plus the in-memory mixture `model` dict so
+the caller can run the cross-sampler step without rebuilding it.
+
+No mu_recovery / sigma_recovery tables: upstream (@ 9cde043) stopped relabeling mu_k/
+Sigma entirely - only pvec is ECR-relabeled now, since all other inference uses
+label-invariant functionals (marginal density, mixture moments). Per-component mu/Sigma
+recovery vs ground truth is therefore no longer computed here either, matching upstream.
 
 The marginal-density tables are computed on the TWO grid scenarios of the study's
 full_marginal_comparison notebook (upstream @ 893e63f): "full" (build_grids_full,
@@ -46,7 +51,7 @@ COND_KEYS = ("dataset_key", "scenario", "k_true", "data_seed", "k_model", "sampl
 # The full set of per-run table names per_run_tables() returns, in output order. (The
 # cross-sampler marginal tables are NOT here - they need several runs together.)
 TABLE_NAMES = ("runs", "ecr_report", "weights", "pvec_means", "convergence", "moments",
-               "mu_recovery", "sigma_recovery", "delta_recovery", "beta_recovery",
+               "delta_recovery", "beta_recovery",
                "beta_summary", "diagnostics", "marginal_distances", "marginal_diagnostics")
 
 
@@ -63,14 +68,6 @@ def build_model(post, name, duration_s=None):
     std = np.sqrt(np.clip(np.diagonal(Sigma, axis1=3, axis2=4), 0.0, None))
     return {"name": name, "mu": mu, "pvec": pvec, "Sigma": Sigma, "std": std,
             "is_mcmc": True, "duration_s": duration_s}
-
-
-def _match_components(post_mu_mean, true_mu, K_true):
-    """Hungarian-match model components -> true components on squared mu distance.
-    Returns {model_slot: true_idx} for the K_true matched slots (analysis.summarize_mu_k)."""
-    cost = np.sum((post_mu_mean[:, None, :] - true_mu[None, :K_true, :]) ** 2, axis=-1)  # (K,K_true)
-    row, col = linear_sum_assignment(cost)
-    return {int(r): int(c) for r, c in zip(row, col)}
 
 
 # --------------------------------------------------------------------------- #
@@ -146,14 +143,17 @@ def beta_summary_rows(beta_draws, true_beta, param_names, cond=None, ci=(2.5, 97
     return rows
 
 
-def pvec_mean_table(posterior_samples, relabeled, K):
+def pvec_mean_table(posterior_samples, pvec_after, K):
     """Mean component weight per slot, BEFORE and AFTER ECR relabeling.
+
+    `pvec_after` is the relabeled pvec array (C,S,K) returned by
+    label_switching.relabel_pvec - not a full posterior dict.
 
     Each stage is ranked INDEPENDENTLY by descending mean weight - read BY RANK within
     a stage, NOT row-to-row across stages (before relabeling the raw labels have no
     stable identity; that IS label switching)."""
     stages = [("before", np.asarray(analysis._recover_pvec(posterior_samples))),
-              ("after",  np.asarray(analysis._recover_pvec(relabeled)))]
+              ("after",  np.asarray(pvec_after))]
     rows = []
     for stage, pvec in stages:
         C, S, _ = pvec.shape
@@ -161,66 +161,6 @@ def pvec_mean_table(posterior_samples, relabeled, K):
         for rank, m in enumerate(means):
             rows.append({"stage": stage, "rank": rank, "pvec_mean": float(m)})
     return pd.DataFrame(rows)
-
-
-# --------------------------------------------------------------------------- #
-# Parameter-recovery tables (ECR-relabeled posterior, so per-component means are
-# not corrupted by label switching).
-# --------------------------------------------------------------------------- #
-def mu_recovery_rows(relabeled, truth, cond, K, K_true, param_names):
-    """Per-component mu_k recovery vs TRUE_MU_K. Returns (rows, mapping) so the same
-    model->true matching is reused for Sigma."""
-    mu = np.asarray(relabeled["mu_k"])                          # (C,S,K,P)
-    P = mu.shape[-1]
-    flat = mu.reshape(-1, K, P)
-    post_mean = flat.mean(axis=0)                              # (K,P)
-    true_mu = np.asarray(truth["TRUE_MU_K"], dtype=float)      # (K_true,P)
-    mapping = _match_components(post_mean, true_mu, K_true)
-    rows = []
-    for k in range(K):
-        tk = mapping.get(k)
-        for p in range(P):
-            d = flat[:, k, p]
-            lo, hi = np.percentile(d, [2.5, 97.5])
-            tv = float(true_mu[tk, p]) if tk is not None else np.nan
-            rows.append({**cond, "slot": k, "matched_true": (tk if tk is not None else np.nan),
-                         "live": tk is not None, "param": param_names[p],
-                         "post_mean": float(d.mean()), "post_std": float(d.std()),
-                         "ci_low": float(lo), "ci_high": float(hi), "true_value": tv,
-                         "abs_diff": (abs(tv - float(d.mean())) if tk is not None else np.nan),
-                         "in_ci": (bool(lo <= tv <= hi) if tk is not None else np.nan)})
-    return rows, mapping
-
-
-def sigma_recovery_rows(relabeled, truth, cond, K, K_true, mapping, param_names):
-    """Per-component Sigma_k recovery vs TRUE_SIGMA_K, plus the empirical covariance of
-    the true betas assigned to that component (analysis.recover_covariance_matrices)."""
-    Sigma = np.asarray(relabeled["Sigma"])                     # (C,S,K,P,P)
-    P = Sigma.shape[-1]
-    flat = Sigma.reshape(-1, K, P, P)
-    true_sig = np.asarray(truth["TRUE_SIGMA_K"], dtype=float)  # (K_true,P,P)
-    tbeta = np.asarray(truth["TRUE_BETA"], dtype=float)        # (N,P)
-    tind = np.asarray(truth["TRUE_INDICATORS"]).ravel()        # (N,)
-    rows = []
-    for k in range(K):
-        tk = mapping.get(k)
-        emp = None
-        if tk is not None:
-            sub = tbeta[tind == tk]
-            if sub.shape[0] > P:
-                emp = np.cov(sub, rowvar=False)
-        for i in range(P):
-            for j in range(i + 1):                             # lower triangle incl. diagonal
-                d = flat[:, k, i, j]
-                lo, hi = np.percentile(d, [2.5, 97.5])
-                tv = float(true_sig[tk, i, j]) if tk is not None else np.nan
-                rows.append({**cond, "slot": k, "matched_true": (tk if tk is not None else np.nan),
-                             "live": tk is not None, "row": param_names[i], "col": param_names[j],
-                             "post_mean": float(d.mean()), "ci_low": float(lo), "ci_high": float(hi),
-                             "true_value": tv, "empirical": (float(emp[i, j]) if emp is not None else np.nan),
-                             "abs_diff": (abs(tv - float(d.mean())) if tk is not None else np.nan),
-                             "in_ci": (bool(lo <= tv <= hi) if tk is not None else np.nan)})
-    return rows
 
 
 def delta_recovery_rows(post, truth, cond, param_names):
@@ -312,7 +252,7 @@ def allocation_accuracy(post, report, truth, K, Z):
         return {"alloc_accuracy": np.nan, "adjusted_rand": np.nan}
     tind = np.asarray(tind).ravel()
     try:
-        z, _ = ls.reconstruct_allocations(post, Z=Z)            # (C,S,N) raw labels
+        z = ls.reconstruct_allocations(post, Z=Z)                # (C,S,N) raw labels
     except Exception:
         return {"alloc_accuracy": np.nan, "adjusted_rand": np.nan}
     C, S, N = z.shape
@@ -359,8 +299,9 @@ def per_run_tables(post, meta, truth, diag=None):
                        "max_leapfrog": meta.get("max_leapfrog"),
                        "mean_acceptance": meta.get("mean_acceptance")}]
 
-    # ECR.iterative.1 relabeling + honest verdict against the invariant gate.
-    relabeled, report = ls.relabel_run(post, K=K, Z=Z, K_true=K_true)
+    # ECR relabeling of pvec (only pvec - mu_k/Sigma stay unrelabeled; all other
+    # inference uses label-invariant functionals) + honest verdict against the gate.
+    pvec_after, report = ls.relabel_pvec(post, K=K, Z=Z, K_true=K_true)
     gate = analysis.invariant_convergence_summary(post, include_cov=True)
     verdict = ls.classify_outcome(report, gate)
     alloc = allocation_accuracy(post, report, truth, K, Z)
@@ -368,10 +309,10 @@ def per_run_tables(post, meta, truth, diag=None):
                              "switching_rate": report["switching_rate"], "verdict": verdict["verdict"],
                              "gate_passed": verdict["gate_passed"],
                              "invariant_pvec_sorted_rhat": verdict["invariant_pvec_sorted_rhat"],
-                             "invariant_Eu_rhat": verdict["invariant_Eu_rhat"], **alloc}]
+                             **alloc}]
 
     # ECR-relabeled component weights (slots ordered by descending weight).
-    pvec_re = np.asarray(relabeled["pvec"]).reshape(-1, K)
+    pvec_re = np.asarray(pvec_after).reshape(-1, K)
     true_desc = np.sort(np.asarray(truth["TRUE_PVEC"]).ravel())[::-1]
     wrows = []
     for slot in range(K):
@@ -386,22 +327,25 @@ def per_run_tables(post, meta, truth, diag=None):
     # pvec mean weights per component, BEFORE and AFTER relabeling (each ranked by descending
     # mean weight) - logged for every run so the weight distribution can be studied across seeds.
     pmrows = []
-    for _, r in pvec_mean_table(post, relabeled, K).iterrows():
+    for _, r in pvec_mean_table(post, pvec_after, K).iterrows():
         pmrows.append({**cond, "stage": r["stage"], "rank": int(r["rank"]),
                        "pvec_mean": float(r["pvec_mean"])})
     tables["pvec_means"] = pmrows
 
-    # convergence: label-invariant gate + per-component (raw) + per-component AFTER relabel
-    # (ESS should recover for the live slots - the signal that justifies ECR).
+    # convergence: label-invariant gate + per-slot pvec (raw) + per-slot pvec AFTER relabel
+    # (ESS should recover for the live slots - the signal that justifies ECR). Only pvec is
+    # diagnosed here (mu_k/Sigma are not relabeled upstream anymore, so per-component mu/Sigma
+    # R-hat/ESS would be label-switched noise, not a meaningful diagnostic).
+    pvec_before = np.asarray(analysis._recover_pvec(post))
     crows = []
     for q, r in gate.iterrows():
         crows.append({**cond, "scope": "invariant", "quantity": q, "live": np.nan,
                       "rhat": float(r["rhat"]), "ess": float(r["ess"])})
-    for _, r in ls.component_convergence_table(post, K, K_true=K_true).iterrows():
-        crows.append({**cond, "scope": "component", "quantity": f"slot{int(r['slot'])}:{r['quantity']}",
+    for _, r in ls.pvec_convergence_table(pvec_before, K, K_true=K_true).iterrows():
+        crows.append({**cond, "scope": "component", "quantity": f"slot{int(r['slot'])}:pvec",
                       "live": bool(r["live"]), "rhat": float(r["rhat"]), "ess": float(r["ess"])})
-    for _, r in ls.component_convergence_table(relabeled, K, K_true=K_true).iterrows():
-        crows.append({**cond, "scope": "component_after", "quantity": f"slot{int(r['slot'])}:{r['quantity']}",
+    for _, r in ls.pvec_convergence_table(pvec_after, K, K_true=K_true).iterrows():
+        crows.append({**cond, "scope": "component_after", "quantity": f"slot{int(r['slot'])}:pvec",
                       "live": bool(r["live"]), "rhat": float(r["rhat"]), "ess": float(r["ess"])})
     tables["convergence"] = crows
 
@@ -413,10 +357,7 @@ def per_run_tables(post, meta, truth, diag=None):
                           "mix_var": float(var[j, j]), "true_mix_mean": float(tmean[j]),
                           "true_mix_var": float(tvar[j, j])} for j in range(P)]
 
-    # parameter recovery vs ground truth (relabeled for mu/Sigma; identified for Delta/beta).
-    mu_rows, mapping = mu_recovery_rows(relabeled, truth, cond, K, K_true, param_names)
-    tables["mu_recovery"] = mu_rows
-    tables["sigma_recovery"] = sigma_recovery_rows(relabeled, truth, cond, K, K_true, mapping, param_names)
+    # parameter recovery vs ground truth (Delta/beta are individually identified, no ECR needed).
     tables["delta_recovery"] = delta_recovery_rows(post, truth, cond, param_names)
     tables["beta_recovery"] = beta_recovery_rows(post, truth, cond, param_names)
     tables["beta_summary"] = beta_summary_rows(

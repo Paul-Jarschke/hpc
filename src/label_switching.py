@@ -1,56 +1,24 @@
 """
-ECR.iterative.1 relabeling for the mixture HBMNL posterior (Papastamoulis &
+Label-switching post-processing for the mixture WEIGHTS pvec (Papastamoulis &
 Iliopoulos 2010; Papastamoulis 2016, JSS - the `label.switching` R package).
+Only pvec is relabeled; component means/covariances are not post-processed -
+all other inference in the study uses label-invariant functionals
+(analysis.invariant_convergence_summary). Input draws are never mutated.
 
-Returns a relabeled COPY of the posterior plus a report; the input draws are
-never mutated.
+Method: ECR iterative version 1 (Papastamoulis 2016, Algorithm 5) on HARD
+allocations z[t,i] = argmax_k r_{tik}. Liesel marginalizes the allocations, so
+responsibilities are reconstructed post-hoc: r_{tik} ∝ pvec_{tk} *
+N(beta_{ti}; mu_{tk} + Z_i @ Delta_t, Sigma_{tk}) - the Z@Delta term is
+required (Rossi Eq. 5.5.19). The same reconstruction serves NUTS, HMC and
+bayesm (bayesm's own sampled z is ignored). Hard allocations tolerate the
+reconstruction noise better than the soft probabilities `ecr.iterative.2`
+needs. Empty components under K_MODEL > K_TRUE claim no observations and need
+no special casing.
 
-Why ECR.iterative.1 (of the three ECR variants in label.switching)
-------------------------------------------------------------------
-`label.switching` offers `ecr` (needs a pivot), `ecr.iterative.1` (pivot-free,
-uses the hard allocation matrix z) and `ecr.iterative.2` (pivot-free, uses the
-m x n x K classification-probability array p).
+Relabeling removes PERMUTATION ambiguity only, not genuine MULTIMODALITY
+(chains in different partition modes); the report distinguishes the two.
 
-  * `ecr`: its pivot allocation is not robust when independent chains have
-    collapsed to different, incompatible pivots.
-  * `ecr.iterative.1` (used here): pivot-free, and it works on the HARD
-    allocations z = argmax_k r_{ik}. Liesel marginalizes the allocations, so
-    responsibilities must be RECONSTRUCTED post-hoc; hard allocations are far
-    more robust to the noise in that reconstruction than the full soft p that
-    `ecr.iterative.2` consumes. It is also the simplest of the three.
-  * Overspecified K_MODEL > K_TRUE needs no special casing: collapsed (empty)
-    components claim essentially no observations, so they never compete for a
-    real component's slot.
-
-The algorithm (faithful to the package)
----------------------------------------
-Inputs: z, an m x n matrix of allocations z[t,i] in {0..K-1}. Maintain a
-per-iteration relabel map tau_t : {0..K-1} -> {0..K-1} (raw label -> reference
-label), initialised to the identity. Iterate to a fixed point:
-
-  1. q[i,k] = (1/m) * sum_t 1{ tau_t(z[t,i]) = k }            (running reference)
-  2. for each iteration t, choose tau_t to MAXIMISE sum_i q[i, tau_t(z[t,i])],
-     i.e. solve the K x K assignment  max_sigma sum_j A_t[j, sigma(j)]  where
-     A_t[j,k] = sum_{i : z[t,i]=j} q[i,k]   (via scipy.optimize.linear_sum_assignment)
-  3. repeat until no tau_t changes.
-
-Reconstructing the allocations (Rossi Eq. 5.5.19)
--------------------------------------------------
-The household-specific component mean is mu_k + Z_i @ Delta (Z@Delta MUST be
-included). Responsibilities r_{tik} ∝ pvec_{tk} * N(beta_{ti} ; mu_{tk}+Z_i Delta_t,
-Sigma_{tk}); z[t,i] = argmax_k r_{tik}. The same reconstruction serves NUTS, HMC
-and bayesm alike (bayesm's own sampled z is ignored so one method covers all three).
-
-What is and isn't fixed
------------------------
-Relabeling removes PERMUTATION ambiguity (one mode). It cannot remove genuine
-MULTIMODALITY (chains in different partition modes of the mixture weight
-posterior); the report distinguishes the two. Component-level recovery is
-illustrative-only; the load-bearing inference is on the label-invariant
-functionals (analysis.invariant_convergence_summary), which relabeling leaves
-mathematically unchanged.
-
-Dependencies: numpy, scipy, arviz only.
+Dependencies: numpy, scipy, arviz.
 """
 
 import numpy as np
@@ -65,15 +33,11 @@ from src import analysis
 # 1. Reconstruct hard allocations  z[t,i] = argmax_k r_{tik}   (Rossi Eq 5.5.19)
 # --------------------------------------------------------------------------- #
 def reconstruct_allocations(posterior_samples, Z=None, chunk=512):
-    """Reconstruct per-unit hard allocations z of shape (C, S, N).
+    """Reconstruct per-unit hard allocations z[t,i] = argmax_k r_{tik}, (C,S,N).
 
-    Parameters
-    ----------
-    posterior_samples : dict with mu_k (C,S,K,P), pvec/pvec_latent,
-                        sigma_inv_chol_k_latent (C,S,K,nlat) and beta_i (C,S,N,P).
-    Z                 : (N, D) demographics; if given (and 'Delta' present) the
-                        household-specific mean mu_k + Z_i @ Delta is used.
-    chunk             : draws processed per batch (caps peak memory).
+    posterior_samples needs mu_k, pvec (or pvec_latent), sigma_inv_chol_k_latent
+    and beta_i. If Z (N, D) is given and 'Delta' is present, the household mean
+    mu_k + Z_i @ Delta is used. `chunk` caps peak memory.
     """
     mu    = np.asarray(posterior_samples["mu_k"])                     # (C,S,K,P)
     pvec  = np.asarray(analysis._recover_pvec(posterior_samples))    # (C,S,K)
@@ -99,13 +63,12 @@ def reconstruct_allocations(posterior_samples, Z=None, chunk=512):
     log2pi  = np.log(2.0 * np.pi)
     eyeP    = np.eye(P)
     z = np.empty((M, N), dtype=np.int16)
-    conf = np.empty(M, dtype=float)   # per-draw allocation confidence (for pivot pick)
 
     for a in range(0, M, chunk):
         b = min(a + chunk, M)
         Sc   = Sigma[a:b] + 1e-6 * eyeP                              # (m,K,P,P) jitter
         Sinv = np.linalg.inv(Sc)                                     # (m,K,P,P)
-        _, slogdet = np.linalg.slogdet(Sc)                          # (m,K)  (already this chunk)
+        _, slogdet = np.linalg.slogdet(Sc)                          # (m,K)
         if use_delta:
             ZD  = np.einsum("nd,mdp->mnp", Z, Delta[a:b])            # (m,N,P)
             loc = mu[a:b][:, None, :, :] + ZD[:, :, None, :]         # (m,N,K,P)
@@ -115,62 +78,55 @@ def reconstruct_allocations(posterior_samples, Z=None, chunk=512):
         quad = np.einsum("mnkp,mkpq,mnkq->mnk", diff, Sinv, diff)     # (m,N,K)
         logr = logpvec[a:b][:, None, :] - 0.5 * (P * log2pi + slogdet[:, None, :] + quad)
         z[a:b] = np.argmax(logr, axis=2).astype(np.int16)
-        # confidence = mean over units of the max log-responsibility (after normalising)
-        lse = np.logaddexp.reduce(logr, axis=2)                      # (m,N)
-        conf[a:b] = (logr.max(axis=2) - lse).mean(axis=1)            # mean log P(assigned)
 
-    return z.reshape(C, S, N), conf.reshape(C, S)
+    return z.reshape(C, S, N)
 
 
 # --------------------------------------------------------------------------- #
-# 2. ECR.iterative.1  (pivot-free; Papastamoulis & Iliopoulos 2010)
+# 2. ECR.iterative.1  (pivot-free; Papastamoulis & Iliopoulos 2016)
 # --------------------------------------------------------------------------- #
-def ecr_iterative_1(z, K, pivot=0, maxiter=100):
-    """Pivot-free ECR on hard allocations z (C,S,N) in {0..K-1}.
+def ecr_iterative_1(z, K, maxiter=100):
+    """ECR iterative version 1 (Papastamoulis 2016, Algorithm 5) on hard
+    allocations z (C,S,N) in {0..K-1}. From identity permutations, alternate
+    (2) pivot z*_i = per-unit mode of the relabeled allocations and (3) per
+    draw the permutation maximising sum_i 1{tau_t(z[t,i]) = z*_i} (a K x K
+    linear assignment), until (4) the total agreement stops improving. The
+    objective is monotone and bounded, so termination is guaranteed.
 
-    The running reference q[i,k] = mean_t 1{tau_t(z[t,i])=k} is SEEDED from the
-    one-hot allocation of a single pivot draw (the highest-confidence draw, passed
-    in via `pivot`), then refined to the global mean by the iteration. Seeding is
-    essential: from a uniform reference (identity init under balanced switching)
-    every assignment is tied and ECR sticks at the degenerate fixed point. Because
-    the reference is then iterated to the global mean, the final labeling is robust
-    to the exact pivot (unlike the non-iterative `ecr`, whose pivot allocation is
-    not robust across independently-collapsed chains).
-
-    Returns tau (C,S,K) raw->ref maps, converged, n_iter, switching_rate.
+    Returns (tau (C,S,K) raw->ref maps, converged, n_iter, switching_rate).
     """
     C, S, N = z.shape
     M = C * S
-    zf = z.reshape(M, N)
-    masks = [(zf == j) for j in range(K)]                   # per-component membership
+    zf = z.reshape(M, N).astype(np.int64)
+    masks = [(zf == j).astype(np.float64) for j in range(K)]   # per-component membership
 
-    # Seed the reference from the pivot draw's hard allocation (one-hot).
-    q = np.zeros((N, K))
-    q[np.arange(N), zf[pivot]] = 1.0
-
-    tau = np.tile(np.arange(K), (M, 1))
-    prev_new = None
+    tau = np.tile(np.arange(K), (M, 1))                        # (1) identity init
+    best_F = -1.0
     converged = False
     n_iter = 0
     for it in range(maxiter):
         n_iter = it + 1
-        # A_t[j,k] = sum_{i: z[t,i]=j} q[i,k]  -> assign to MAXIMISE agreement.
+        # (2) pivot = per-unit mode of the relabeled allocations, one-hot coded
+        zr = np.take_along_axis(tau, zf, axis=1)
+        counts = np.stack([(zr == k).sum(axis=0) for k in range(K)], axis=1)  # (N,K)
+        zstar = np.zeros((N, K))
+        zstar[np.arange(N), counts.argmax(axis=1)] = 1.0
+        # (3) A_t[j,k] = #{i : z[t,i] = j, z*_i = k}; maximise sum_j A_t[j, tau(j)]
         A = np.zeros((M, K, K))
         for j in range(K):
-            A[:, j, :] = masks[j].astype(np.float64) @ q     # (M,N)@(N,K) -> (M,K)
+            A[:, j, :] = masks[j] @ zstar                      # (M,N)@(N,K) -> (M,K)
         new = np.empty_like(tau)
+        F = 0.0
         for t in range(M):
-            _, col = linear_sum_assignment(-A[t])            # raw j -> ref col[j]
+            _, col = linear_sum_assignment(-A[t])              # raw j -> ref col[j]
             new[t] = col
+            F += A[t][np.arange(K), col].sum()
         tau = new
-        if prev_new is not None and np.array_equal(new, prev_new):
+        # (4) stop at the first non-improvement of the agreement objective
+        if F <= best_F:
             converged = True
             break
-        prev_new = new.copy()
-        # Update reference: relabel allocations and recompute frequencies.
-        zr = np.take_along_axis(tau, zf, axis=1)
-        for k in range(K):
-            q[:, k] = (zr == k).mean(axis=0)
+        best_F = F
 
     switching_rate = float(np.mean(np.any(tau != np.arange(K), axis=1)))
     return tau.reshape(C, S, K), converged, n_iter, switching_rate
@@ -190,111 +146,81 @@ def _apply_perms_axis(arr, perms):
     return np.take_along_axis(flat, idx, axis=1).reshape(arr.shape)
 
 
-def relabel_run(posterior_samples, K, Z=None, K_true=None, maxiter=100):
-    """Relabel a mixture posterior with ECR.iterative.1.
+def relabel_pvec(posterior_samples, K, Z=None, K_true=None, maxiter=100):
+    """Relabel the mixture weights with ECR iterative version 1.
 
-    Returns (relabeled, report). `relabeled` is a COPY of posterior_samples with
-    'mu_k', 'pvec' (simplex), 'Sigma' and 'sigma_inv_chol_k_latent' permuted to one
-    global labeling; beta_i / Delta are untouched and 'pvec_latent' is dropped
-    (a K-1 SoftmaxCentered latent cannot be permuted consistently - 'pvec' is
-    authoritative). `report` carries the permutations, convergence and switching rate.
+    ONLY pvec is post-processed. Returns (pvec_relabeled (C,S,K), report): the
+    per-draw permutations are applied to pvec alone, and the slots are anchored
+    by descending mean weight (slot 0 = heaviest) so the labeling is
+    reproducible. `report` carries the permutations, convergence, switching
+    rate and live slots.
     """
     if K_true is None:
         K_true = K
 
-    relabeled = dict(posterior_samples)
-    mu = np.asarray(posterior_samples["mu_k"])
-    C, S, _, P = mu.shape
+    pvec = np.asarray(analysis._recover_pvec(posterior_samples))    # (C,S,K)
+    C, S = pvec.shape[:2]
 
     if K == 1:
-        return relabeled, {
+        return pvec.copy(), {
             "K": 1, "K_true": K_true, "converged": True, "n_iter": 0,
             "switching_rate": 0.0, "permutations": np.zeros((C, S, 1), dtype=int),
+            "live_slots": [0],
             "note": "single component - label switching not applicable",
         }
 
-    # ECR on reconstructed allocations; seed from the highest-confidence draw.
-    z, conf = reconstruct_allocations(posterior_samples, Z=Z)
-    pivot = int(np.argmax(conf.reshape(-1)))
-    tau, converged, n_iter, switching_rate = ecr_iterative_1(z, K, pivot=pivot, maxiter=maxiter)
+    # ECR (Algorithm 5) on the reconstructed allocations.
+    z = reconstruct_allocations(posterior_samples, Z=Z)
+    tau, converged, n_iter, switching_rate = ecr_iterative_1(z, K, maxiter=maxiter)
 
-    # tau maps raw label j -> reference slot. To reorder arrays indexed by raw
-    # component, NEW slot k must take OLD component tau^{-1}(k): perm = argsort(tau).
+    # tau maps raw label j -> reference slot. To reorder the weight axis,
+    # NEW slot k must take OLD component tau^{-1}(k): perm = argsort(tau).
     perm = np.argsort(tau, axis=2)                      # (C,S,K): old index per new slot
 
     # Canonical global anchoring: order slots by descending mean weight so the
     # labeling is reproducible (slot 0 = heaviest component).
-    pvec = np.asarray(analysis._recover_pvec(posterior_samples))
     pvec_re = _apply_perms_axis(pvec, perm)
     order = np.argsort(-pvec_re.reshape(C * S, K).mean(axis=0))
     perm = perm[:, :, order]
 
-    Sigma = np.asarray(
-        analysis._sigma_from_latent(np.asarray(posterior_samples["sigma_inv_chol_k_latent"]))
-    )
-    relabeled["mu_k"]  = _apply_perms_axis(mu, perm)
-    relabeled["pvec"]  = _apply_perms_axis(pvec, perm)            # simplex, authoritative
-    relabeled["Sigma"] = _apply_perms_axis(Sigma, perm)
-    relabeled["sigma_inv_chol_k_latent"] = _apply_perms_axis(
-        np.asarray(posterior_samples["sigma_inv_chol_k_latent"]), perm
-    )
-    relabeled.pop("pvec_latent", None)
-
-    return relabeled, {
+    return _apply_perms_axis(pvec, perm), {
         "K": K, "K_true": K_true,
         "converged": bool(converged), "n_iter": n_iter,
         "switching_rate": switching_rate,
         "permutations": perm,
         "live_slots": list(range(min(K_true, K))),   # post-anchor heaviest K_true slots
-        "note": "" if converged else f"ECR.iterative.1 did NOT converge in {maxiter} sweeps",
+        "note": "" if converged else f"ECR did NOT converge in {maxiter} sweeps",
     }
 
 
 # --------------------------------------------------------------------------- #
 # 4. Diagnostics (before / after) and outcome classification
 # --------------------------------------------------------------------------- #
-def component_convergence_table(posterior_samples, K, K_true=None, label="", all_slots=True):
-    """Per-component R-hat AND ESS on raw mu_k[...,k,p] and pvec[...,k].
-
-    Slots are ordered by descending mean weight and flagged 'live' (the K_true
-    heaviest) vs empty. all_slots=True reports every component; False keeps only
-    the live ones (empty/overspecified slots are unidentified noise)."""
+def pvec_convergence_table(pvec, K, K_true=None, label=""):
+    """Per-slot R-hat and ESS of the weights. `pvec` is (C,S,K), raw or
+    relabeled. Slots are ordered by descending mean weight; the K_true heaviest
+    are flagged 'live' (surplus slots are unidentified noise)."""
     if K_true is None:
         K_true = K
-    mu   = np.asarray(posterior_samples["mu_k"])
-    pvec = np.asarray(analysis._recover_pvec(posterior_samples))
-    C, S, _, P = mu.shape
-    order = np.argsort(-pvec.reshape(C * S, K).mean(axis=0))   # all K, descending weight
+    pvec = np.asarray(pvec)
+    C, S = pvec.shape[:2]
+    order = np.argsort(-pvec.reshape(C * S, K).mean(axis=0))   # descending weight
     live_set = set(int(k) for k in order[:min(K_true, K)])
-    slots = order if all_slots else order[:min(K_true, K)]
-
-    rows = []
-    for k in slots:
-        is_live = int(k) in live_set
-        rows.append({"slot": int(k), "live": is_live, "quantity": "pvec",
-                     "rhat": float(az.rhat(pvec[:, :, k])),
-                     "ess":  float(az.ess(pvec[:, :, k]))})
-        for p in range(P):
-            rows.append({"slot": int(k), "live": is_live, "quantity": f"mu[{p}]",
-                         "rhat": float(az.rhat(mu[:, :, k, p])),
-                         "ess":  float(az.ess(mu[:, :, k, p]))})
+    rows = [{"slot": int(k), "live": int(k) in live_set,
+             "rhat": float(az.rhat(pvec[:, :, k])),
+             "ess":  float(az.ess(pvec[:, :, k]))} for k in order]
     df = pd.DataFrame(rows)
     if label:
         df.insert(0, "stage", label)
     return df
 
 
-def plot_before_after_traces(before, after, K, title="", true_vals=None, K_true=None, ylim=None):
-    """Overlaid chain traces for ALL K components, raw (before) vs relabeled (after).
+def plot_before_after_traces(before, after, K, title="", true_vals=None, ylim=None):
+    """Weight traces for all K slots, raw (left) vs relabeled (right).
 
-    before, after : (C, S, K) arrays of a component-indexed scalar (e.g. pvec, or
-    one column of mu). A K x 2 grid (left = before, right = after) makes the label
-    switching - and its removal - directly visible for every component.
-    true_vals : optional length-K_true ground truth; drawn as a dashed line on the
-    matching 'after' rows (after relabeling, slots are ordered by descending weight,
-    so true values sorted the same way line up rank-to-rank).
-    ylim : optional (lo, hi) y-axis limits applied to every subplot, e.g.
-    (-0.05, 1.05) for pvec so the scale matches the analysis notebook's pvec traces."""
+    before, after : (C, S, K) pvec arrays. true_vals: optional length-K_true
+    truth, drawn on the 'after' rows rank-to-rank (slots are weight-ordered
+    after relabeling). ylim: optional (lo, hi) y-limits."""
     import matplotlib.pyplot as plt
 
     before = np.asarray(before)
@@ -322,19 +248,14 @@ def plot_before_after_traces(before, after, K, title="", true_vals=None, K_true=
     plt.show()
 
 
-def mixture_mean(posterior_samples):
-    """Label-invariant mixture mean E[u] = sum_k pvec_k mu_k, shape (C,S,P)."""
-    mu = np.asarray(posterior_samples["mu_k"])
-    pv = np.asarray(analysis._recover_pvec(posterior_samples))
-    return np.einsum("csk,cskp->csp", pv, mu)
-
-
-def invariance_guard(before_samples, after_samples, atol=1e-6):
-    """NO-CORRUPTION guard (NOT a success signal). E[u] is symmetric in the
-    component triples, so it is invariant under ANY joint per-draw permutation -
-    a mismatch means the permutation was applied inconsistently across arrays
-    (a bug), but a match does NOT certify the relabeling is correct."""
-    return bool(np.allclose(mixture_mean(before_samples), mixture_mean(after_samples), atol=atol))
+def invariance_guard(pvec_before, pvec_after, atol=1e-8):
+    """No-corruption guard, NOT a success signal: a pure relabeling only
+    permutes each draw's weights, so the per-draw SORTED pvec must be identical
+    before and after; a mismatch means the draws were corrupted. A match does
+    not certify the relabeling is correct."""
+    b = np.sort(np.asarray(pvec_before), axis=-1)
+    a = np.sort(np.asarray(pvec_after), axis=-1)
+    return bool(np.allclose(b, a, atol=atol))
 
 
 def classify_outcome(report, gate_df, rhat_thresh=1.1):
@@ -347,9 +268,7 @@ def classify_outcome(report, gate_df, rhat_thresh=1.1):
     NO-OP : almost no switching was present.
     """
     ps = gate_df[gate_df.index.str.startswith("pvec_sorted")]
-    eu = gate_df[gate_df.index.str.startswith("E[u]")]
     max_ps = float(ps["rhat"].max()) if len(ps) else np.nan
-    max_eu = float(eu["rhat"].max()) if len(eu) else np.nan
 
     if np.isfinite(max_ps) and max_ps > rhat_thresh:
         verdict = "MULTIMODAL (genuine - sorting removed labels, so not a label artifact; ECR aligns within-mode only)"
@@ -362,6 +281,5 @@ def classify_outcome(report, gate_df, rhat_thresh=1.1):
         "verdict": verdict,
         "switching_rate": report["switching_rate"],
         "invariant_pvec_sorted_rhat": max_ps,
-        "invariant_Eu_rhat": max_eu,
-        "gate_passed": bool(np.isfinite(max_eu) and max_eu < rhat_thresh),
+        "gate_passed": bool(np.isfinite(max_ps) and max_ps < rhat_thresh),
     }
