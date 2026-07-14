@@ -141,7 +141,7 @@ def _diag_grid(d: pd.DataFrame, metric: str, n_chains: int) -> ggplot:
         + scale_color_manual(values=color_vals,
                              labels=[SAMPLER_LABELS.get(s, s) for s in sampler_order])
         + labs(x="k_true", y=ylab, color="Sampler",
-               title=f"Marginal {mtitle} vs k_true  (c{n_chains})")
+               title=f"Marginal {mtitle} vs k_true")
         + theme_bw()
         + theme(figure_size=(13, 11), axis_text_x=element_text(size=8),
                 plot_title=element_text(size=11))

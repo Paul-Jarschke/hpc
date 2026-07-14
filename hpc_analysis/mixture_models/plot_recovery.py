@@ -569,7 +569,7 @@ def delta_coverage_by_ktrue(n_chains: int = 2, df=None) -> ggplot:
         + scale_y_continuous(breaks=[80, 85, 90, 95, 100])
         + coord_cartesian(ylim=(80, 100))
         + labs(x="k_true", y="Coverage (%)", fill="Sampler",
-               title=f"95% CI Coverage of Δ vs k_true (c{n_chains})")
+               title="95% CI Coverage of Δ vs k_true")
         + theme_bw()
         + theme(figure_size=(14, 7), axis_text_x=element_text(size=9),
                 plot_title=element_text(size=11))
@@ -717,7 +717,7 @@ def beta_correlation_by_ktrue(n_chains: int = 2, corr_df=None) -> ggplot:
                              labels=[SAMPLER_LABELS.get(s, s) for s in sampler_order])
         + scale_x_discrete(expand=(0, 0.4))
         + labs(x="k_true", y="r(β̂, β)", color="Sampler",
-               title=f"β Correlation vs k_true (c{n_chains})")
+               title="β Correlation vs k_true")
         + theme_bw()
         + theme(figure_size=(12, 5), axis_text_x=element_text(size=9),
                 plot_title=element_text(size=11))
@@ -801,7 +801,7 @@ def beta_coverage_by_ktrue(n_chains: int = 2, df=None) -> ggplot:
         + scale_y_continuous(breaks=[80, 85, 90, 95, 100])
         + coord_cartesian(ylim=(80, 100))
         + labs(x="k_true", y="Coverage (%)", fill="Sampler",
-               title=f"95% CI Coverage of β vs k_true (c{n_chains})")
+               title="95% CI Coverage of β vs k_true")
         + theme_bw()
         + theme(figure_size=(12, 5), axis_text_x=element_text(size=9),
                 plot_title=element_text(size=11))
@@ -852,7 +852,7 @@ def marginal_distance_by_ktrue(n_chains: int = 2, metric: str = "Hellinger",
                              labels=[SAMPLER_LABELS.get(s, s) for s in sampler_order])
         + scale_x_discrete(expand=(0, 0.4))
         + labs(x="k_true", y=ylabel, color="Sampler",
-               title=f"{ylabel} vs k_true (c{n_chains}, {grid} grid)")
+               title=f"{ylabel} vs k_true ({grid} grid)")
         + theme_bw()
         + theme(figure_size=(12, 5), axis_text_x=element_text(size=9),
                 plot_title=element_text(size=11))
@@ -963,7 +963,7 @@ def marginal_metric_boxplot(metric: str = "Hellinger", n_chains: int = 2,
                               labels=[SAMPLER_LABELS.get(s, s) for s in sampler_order])
          + scale_x_discrete(labels=[SAMPLER_LABELS.get(s, s) for s in sampler_order])
          + labs(x="Sampler", y=ylabel, color="Sampler",
-                title=f"{ylabel} vs True DGP (c{n_chains}, {grid} grid)")
+                title=f"{ylabel} vs True DGP ({grid} grid)")
          + theme_bw()
          + theme(figure_size=(12, 9), axis_text_x=element_text(size=7),
                  plot_title=element_text(size=11))
@@ -989,7 +989,7 @@ def runtime_samplers_by_ktrue(n_chains: int = 2, df: Optional[pd.DataFrame] = No
     return recovery_boxplot(
         df, value="runtime_s", x="k_true", color="sampler", filters=filters,
         x_order=[1, 2, 3, 5], hline=None, jitter=jitter, logy=logy,
-        title=f"Runtime vs k_true, by sampler (c{n_chains})",
+        title="Runtime vs k_true, by sampler",
         xlab="k_true",
         ylab="Runtime (s, log)" if logy else "Runtime (s)", figure_size=(9.0, 5.5),
     )
@@ -1077,7 +1077,7 @@ def runtime_plot(df: Optional[pd.DataFrame] = None, *, logy: bool = True,
     return recovery_boxplot(
         d, value="runtime_s", x="sampler", facet_wrap_by="k_true", facet_scales="fixed",
         jitter=jitter, logy=logy,
-        title="Runtime by sampler vs k_true (c1)",
+        title="Runtime by sampler vs k_true",
         ylab="Runtime (s, log)" if logy else "Runtime (s)", xlab="Sampler",
         figure_size=(8.5, 6.0),
     )

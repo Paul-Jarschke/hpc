@@ -926,7 +926,7 @@ def marginal_metric_boxplot(metric: str = "Hellinger", n_chains: int = 2,
                               labels=[SAMPLER_LABELS.get(s, s) for s in sampler_order])
          + scale_x_discrete(labels=[SAMPLER_LABELS.get(s, s) for s in sampler_order])
          + labs(x="Sampler", y=ylabel, color="Sampler",
-                title=f"{ylabel} vs True DGP (c{n_chains}, {grid} grid)")
+                title=f"{ylabel} vs True DGP ({grid} grid)")
          + theme_bw()
          + theme(figure_size=(12, 4.5), axis_text_x=element_text(size=7),
                  plot_title=element_text(size=11))

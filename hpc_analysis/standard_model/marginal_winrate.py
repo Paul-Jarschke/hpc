@@ -193,7 +193,7 @@ def win_rate_plot(comparison: str, tbl: pd.DataFrame, grid: str = "") -> ggplot:
     param_order = [p for p in _PARAM_ORDER if p in set(sub["param"])]
     sub["metric"] = pd.Categorical(sub["metric"], categories=metric_order, ordered=True)
     sub["param"] = pd.Categorical(sub["param"], categories=param_order, ordered=True)
-    gtag = f", {grid} grid" if grid else ""
+    gtag = f" ({grid} grid)" if grid else ""
 
     return (
         ggplot(sub, aes(x="param", y="win_rate", fill="param"))
@@ -204,7 +204,7 @@ def win_rate_plot(comparison: str, tbl: pd.DataFrame, grid: str = "") -> ggplot:
         + scale_y_continuous(limits=[0, 1], breaks=[0, 0.25, 0.5, 0.75, 1.0])
         + labs(x="Parameter", y=f"Share of datasets where {chall} < {base}",
                fill="Parameter",
-               title=f"Marginal-distance win rate: {chall} vs {base} (c{CHAINS}{gtag}), by parameter")
+               title=f"Marginal-distance win rate: {chall} vs {base}{gtag}, by parameter")
         + theme_bw()
         + theme(figure_size=(15, 3.6), plot_title=element_text(size=11),
                 axis_text_x=element_text(size=8, rotation=30))

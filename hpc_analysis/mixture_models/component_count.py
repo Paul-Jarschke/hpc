@@ -262,7 +262,7 @@ def plot_k_eff_by_ktrue(n_chains: int = 2, runs: Optional[pd.DataFrame] = None) 
                              labels=[SAMPLER_LABELS.get(s, s) for s in sampler_order])
         + labs(x="k_true",
                y="K_eff (1/Σwₖ²)", color="Sampler",
-               title=f"K_eff vs k_true (c{n_chains})")
+               title="K_eff vs k_true")
         + theme_bw()
         + theme(figure_size=(9, 5), axis_text_x=element_text(size=9),
                 plot_title=element_text(size=11))
@@ -316,7 +316,7 @@ def plot_est_k_confusion(n_chains: int = 2, threshold: float = PRIMARY_THRESHOLD
                             labels=[SAMPLER_LABELS.get(s, s) for s in sampler_order])
         + labs(x=f"Est. # components (w ≥ {threshold:g})",
                y="Fraction of seeds", fill="Sampler",
-               title=f"Recovered Count vs k_true (c{n_chains}, τ={threshold:g})")
+               title=f"Recovered Count vs k_true (τ={threshold:g})")
         + theme_bw()
         + theme(figure_size=(14, 4.5), axis_text_x=element_text(size=9),
                 plot_title=element_text(size=11))
@@ -352,7 +352,7 @@ def plot_est_k_confusion_all_tau(n_chains: int = 2, thresholds: Sequence[float] 
         + scale_fill_manual(values=color_vals,
                             labels=[SAMPLER_LABELS.get(s, s) for s in sampler_order])
         + labs(x="Est. # components (w ≥ τ)", y="Fraction of seeds", fill="Sampler",
-               title=f"Recovered Count vs k_true and τ (c{n_chains})")
+               title="Recovered Count vs k_true and τ")
         + theme_bw()
         + theme(figure_size=(14, 8), axis_text_x=element_text(size=8),
                 plot_title=element_text(size=11))
@@ -405,7 +405,7 @@ def plot_weight_profile_by_ktrue(n_chains: int = 2, df: Optional[pd.DataFrame] =
                             labels=[SAMPLER_LABELS.get(s, s) for s in sampler_order])
         + labs(x="Component slot (descending weight)", y="Mean weight (π̂)",
                color="Sampler", fill="Sampler",
-               title=f"Weight Profile (after ECR) (c{n_chains})")
+               title="Weight Profile (after ECR)")
         + theme_bw()
         + theme(figure_size=(14, 4.5), axis_text_x=element_text(size=9),
                 plot_title=element_text(size=11))
@@ -445,7 +445,7 @@ def plot_weight_profile_before_after(n_chains: int = 2,
                             labels=[SAMPLER_LABELS.get(s, s) for s in sampler_order])
         + labs(x="Component slot (descending weight)", y="Mean weight (π̂)",
                color="Sampler", fill="Sampler",
-               title=f"Weight Profile: Before vs After ECR (c{n_chains})")
+               title="Weight Profile: Before vs After ECR")
         + theme_bw()
         + theme(figure_size=(10, 10), axis_text_x=element_text(size=8),
                 plot_title=element_text(size=11))

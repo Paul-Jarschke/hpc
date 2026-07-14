@@ -143,7 +143,7 @@ def _diag_grid(d: pd.DataFrame, metric: str, n_chains: int) -> ggplot:
                              labels=[SAMPLER_LABELS.get(s, s) for s in sampler_order])
         + scale_x_discrete(labels=[SAMPLER_LABELS.get(s, s) for s in sampler_order])
         + labs(x="Sampler", y=ylab, color="Sampler",
-               title=f"Marginal {mtitle} by Sampler  (c{n_chains})")
+               title=f"Marginal {mtitle} by Sampler")
         + theme_bw()
         + theme(figure_size=(13, 11), axis_text_x=element_text(size=8),
                 plot_title=element_text(size=11))
