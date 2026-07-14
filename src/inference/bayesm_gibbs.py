@@ -24,8 +24,10 @@ Per-iteration sweep order (exactly rhierMnlRwMixture_rcpp_loop):
                           increment cov s^2 * (H_i + Sigma_{ind_i}^{-1})^{-1},
                           H_i = unit Hessian at the fractional-likelihood MLE)
 
-bayesm defaults reproduced: s = 2.93/sqrt(n_params), w = 0.1, beta_i
-initialised at the fractional MLEs, ind initialised in equal blocks.
+bayesm defaults reproduced: s = 2.38/sqrt(n_params) (BayesmConstant.RRScaling;
+the package's Roberts-Gelman-Gilks constant - the Rossi 2005 book text instead
+states 2.93), w = 0.1, beta_i initialised at the fractional MLEs, ind
+initialised in equal blocks.
 
 Because component subsetting is dynamic-shape (forbidden under jit), all
 per-component conditionals use one-hot-masked sufficient statistics; for
@@ -154,12 +156,10 @@ def _niw_conjugate_draw(prng_key, theta, ind, K_comp, n_params, a_mu, nu, V,
                          eye_P, fill_tril):
     """
     One draw of {mu_k, Sigma_k} | ind, theta from their exact bayesm conjugate
-    NIW posterior, via masked one-hot sufficient statistics. Module-level (not
-    a closure) so it is the SINGLE implementation of this formula, shared by
-    the Gibbs sweep's own draw_comps step (this file) and by
-    src.inference.init's data-informed NUTS/HMC initial-value construction --
-    the latter reproduces Rossi's algorithm's first Gibbs draw exactly rather
-    than approximating it, since NUTS/HMC have no Gibbs step of their own.
+    NIW posterior, via masked one-hot sufficient statistics. The single
+    implementation of this formula, shared by the Gibbs sweep's draw_comps
+    step (this file) and by src.inference.init's NUTS/HMC initial-value
+    construction (which reproduces Rossi's first Gibbs draw per chain).
     """
     w1 = jax.nn.one_hot(ind, K_comp, dtype=theta.dtype)               # (n, K)
 
@@ -211,7 +211,7 @@ def run_bayesm_gibbs_inference_mixture_hbmnl(
         burn_in: int = 2000,         # raw sweeps discarded before thinning
         thin: int = 4,               # keep every `thin`-th raw draw after burn-in
         seed: int = 123,
-        s: float | None = None,      # RW scale; bayesm default 2.93/sqrt(n_params)
+        s: float | None = None,      # RW scale; bayesm default 2.38/sqrt(n_params)
         w: float = 0.1):             # fractional-likelihood weight (bayesm default)
     """
     Configure and run the bayesm-exact hybrid Gibbs sampler (data-augmentation
@@ -222,14 +222,12 @@ def run_bayesm_gibbs_inference_mixture_hbmnl(
     the prior hyperparameters are read from model.bayesm_prior so the conjugate
     updates provably match the model's prior.
 
-    Iteration scheme matches run_single_bayesm_experiment.R exactly. bayesm is
-    called with keep=1 there (every raw draw returned), then burn_in is dropped
-    and the remainder thinned by `thin`, both in RAW iteration units - see the
-    comment above `keep_idx` in that script for why this order (not thinning
-    first) is deliberate. This runner reproduces that: the Goose posterior epoch
-    runs UNTHINNED for (r_total - burn_in) raw sweeps (warmup_duration=burn_in
-    discards the first burn_in sweeps exactly as bayesm's manual burn-in slice
-    does), and the thinning is applied afterward with a plain Python stride.
+    Iteration scheme matches run_single_bayesm_experiment.R: bayesm is called
+    with keep=1 there (every raw draw returned), then burn_in is dropped and
+    the remainder thinned by `thin`, both in RAW iteration units. Here the
+    Goose posterior epoch runs UNTHINNED for (r_total - burn_in) raw sweeps
+    (warmup_duration=burn_in plays the role of bayesm's manual burn-in slice),
+    and the thinning is applied afterward with a plain Python stride.
     Posterior sample index j (0-indexed) is raw sweep (burn_in + 1 + j), so
     `[:, ::thin]` keeps j = 0, thin, 2*thin, ... - the same phase as R's
     `seq(burn_in + 1, r_total, by = thin)`.
@@ -245,7 +243,7 @@ def run_bayesm_gibbs_inference_mixture_hbmnl(
     burn_in   : raw sweeps burned via Goose's warmup epoch (bayesm default 2000).
     thin      : post-burn-in thinning interval (bayesm default 4).
     seed      : RNG seed.
-    s         : RW-Metropolis scaling; None -> bayesm default 2.93/sqrt(n_params).
+    s         : RW-Metropolis scaling; None -> bayesm default 2.38/sqrt(n_params).
     w         : fractional-likelihood weight for candidate-density tuning.
 
     Returns
@@ -278,7 +276,7 @@ def run_bayesm_gibbs_inference_mixture_hbmnl(
     dirichlet_a = jnp.ones(K_comp) * float(prior["dirichlet_a"])
 
     if s is None:
-        s = 2.93 / np.sqrt(n_params)               # BayesmConstant.RRScaling
+        s = 2.38 / np.sqrt(n_params)               # BayesmConstant.RRScaling / sqrt(nvar)
     s = float(s)
 
     Z = jnp.asarray(data_dict["Z"]) if has_Z else None

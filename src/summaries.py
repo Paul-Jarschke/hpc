@@ -369,10 +369,14 @@ def per_run_tables(post, meta, truth, diag=None):
     # marginal-density comparison vs the TRUE DGP marginal (Rossi Eq. 5.5.19), on the SAME
     # two grid scenarios as the study's full_marginal_comparison notebook: "full" (raw
     # mu +/- 6 sigma envelope over every component incl. surplus ones) and "chebyshev"
-    # (aggregate mixture-moment mean +/- 5 sigma window, >= 96% of each model's own mass).
+    # (exact pooled-marginal mean/std via mc._marginal_moments, +/- 5 sigma window;
+    # Chebyshev's inequality guarantees >= 96% of each model's own mass before the union).
     # Single-model grids -> fully run-independent (needs no sibling samplers), so every run
     # logs both on-node. Distances per parameter: Hellinger, KL(model||true), JSD, TVD,
-    # Wasserstein-1. The `grid` column names the scenario.
+    # Wasserstein-1. retained_mass_model/retained_mass_true (mc.retained_mass) report the
+    # REALISED mass of each side's own marginal inside the (possibly union-widened) window -
+    # the exact counterpart to the theoretical Chebyshev guarantee. The `grid` column names
+    # the scenario.
     true_model = mc.true_dgp_model(truth)
     grid_scenarios = {
         "full":      mc.build_grids_full([model], true_model, n_grid=1000, n_sigma=6),
@@ -380,8 +384,14 @@ def per_run_tables(post, meta, truth, diag=None):
     }
     mdist = []
     for grid_name, grids in grid_scenarios.items():
+        rm_model = mc.retained_mass(model, grids)
+        rm_true = mc.retained_mass(true_model, grids)
         for (_, param), r in mc.distance_table([model], true_model, grids, param_names).iterrows():
-            mdist.append({**cond, "grid": grid_name, "param": param, **r.to_dict()})
+            j = param_names.index(param)
+            mdist.append({**cond, "grid": grid_name, "param": param,
+                          "retained_mass_model": float(rm_model[j]),
+                          "retained_mass_true": float(rm_true[j]),
+                          **r.to_dict()})
     tables["marginal_distances"] = mdist
 
     # marginal convergence: Goose-identical arviz diagnostics on grid-free functionals

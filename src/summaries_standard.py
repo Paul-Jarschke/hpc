@@ -213,7 +213,10 @@ def per_run_tables(post, meta, truth, diag=None):
 
     # marginal-density comparison vs the TRUE DGP marginal, on the SAME two grid
     # scenarios as the mixture pipeline ("full" + "chebyshev"); with K=1 the whole
-    # marginal_comparison machinery applies unchanged.
+    # marginal_comparison machinery applies unchanged. retained_mass_model/
+    # retained_mass_true (mc.retained_mass) report the REALISED mass of each side's
+    # own marginal inside the (possibly union-widened) grid window - the exact
+    # counterpart to the theoretical >= 96% Chebyshev guarantee for the chebyshev grid.
     true_model = mc.true_dgp_standard(truth)
     grid_scenarios = {
         "full":      mc.build_grids_full([model], true_model, n_grid=1000, n_sigma=6),
@@ -221,8 +224,14 @@ def per_run_tables(post, meta, truth, diag=None):
     }
     mdist = []
     for grid_name, grids in grid_scenarios.items():
+        rm_model = mc.retained_mass(model, grids)
+        rm_true = mc.retained_mass(true_model, grids)
         for (_, param), r in mc.distance_table([model], true_model, grids, param_names).iterrows():
-            mdist.append({**cond, "grid": grid_name, "param": param, **r.to_dict()})
+            j = param_names.index(param)
+            mdist.append({**cond, "grid": grid_name, "param": param,
+                          "retained_mass_model": float(rm_model[j]),
+                          "retained_mass_true": float(rm_true[j]),
+                          **r.to_dict()})
     tables["marginal_distances"] = mdist
 
     # marginal convergence: Goose-identical arviz diagnostics on grid-free functionals

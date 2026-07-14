@@ -211,17 +211,14 @@ def build_grids_full(fitted_models, true_model=None, n_grid=4000, n_sigma=6):
 
 def build_grids_chebyshev(fitted_models, true_model=None, n_grid=2000, k=5.0):
     """Per-parameter grid clipped to each model's own [mean - k*std, mean + k*std],
-    unioned over samplers (and the True DGP if given). mean/std are the AGGREGATE
-    mixture mean and variance (Rossi Eq. 5.5.2, via `mixture_moments`), not
-    per-component - so a diffuse surplus/empty component is already down-weighted
-    by its own pvec before the window is set, unlike `build_grids_full`'s raw
-    per-component min/max envelope.
-
-    Chebyshev's inequality, P(|X - mean| >= k*std) <= 1/k**2, holds for ANY
-    distribution with finite variance - no normality/unimodality assumption,
-    which matters here since the invariant marginal is itself a mixture and can
-    be skewed or multimodal. k=5 -> at least 1 - 1/5**2 = 96% of each model's own
-    marginal mass is guaranteed to lie inside its window before the union.
+    unioned over samplers (and the True DGP if given). mean/std are the EXACT
+    moments of that model's pooled marginal d-bar (`_marginal_moments`), so
+    Chebyshev's inequality, P(|X - mean| >= k*std) <= 1/k**2, applies to the
+    trimmed density itself: k=5 guarantees >= 96% of each model's marginal mass
+    inside its own window (before the union widens it), for any distribution
+    with finite variance. A diffuse surplus/empty component is down-weighted by
+    its own pvec, unlike `build_grids_full`'s raw per-component envelope.
+    `retained_mass` reports the realised trim exactly.
 
     Contrast `build_grids_full` (unbounded raw envelope over every component -
     can be arbitrarily wide when K_MODEL > K_TRUE, squashing real mass into a
@@ -232,8 +229,7 @@ def build_grids_chebyshev(fitted_models, true_model=None, n_grid=2000, k=5.0):
     hi = np.full(P, -np.inf)
     models = list(fitted_models) + ([true_model] if true_model is not None else [])
     for m in models:
-        mean, var = mixture_moments(m)
-        std = np.sqrt(np.clip(np.diag(var), 0.0, None))
+        mean, std = _marginal_moments(m)
         lo = np.minimum(lo, mean - k * std)
         hi = np.maximum(hi, mean + k * std)
     return [np.linspace(lo[j], hi[j], n_grid) for j in range(P)]
@@ -267,6 +263,43 @@ def mixture_moments(model):
     betwn  = np.sum(pvec[:, :, None, None] * (diff[:, :, :, None] * diff[:, :, None, :]), axis=1)
     var    = within + betwn
     return mean.mean(0), var.mean(0)
+
+
+def _marginal_moments(model):
+    """Exact mean and std of each pooled marginal d-bar (the mixture over draws
+    AND components): mean = E_r[m_r]; var = E_r[v_r] + Var_r(m_r) by the law of
+    total variance, where m_r/v_r are draw r's mixture mean/variance. Returns
+    (mean (P,), std (P,))."""
+    mu, pvec, std, _, P, K = _flat(model)
+    m_r = np.sum(pvec[:, :, None] * mu, axis=1)                             # (R,P)
+    v_r = np.sum(pvec[:, :, None] * (std ** 2 + mu ** 2), axis=1) - m_r ** 2
+    var = v_r.mean(axis=0) + m_r.var(axis=0)
+    return m_r.mean(axis=0), np.sqrt(np.clip(var, 0.0, None))
+
+
+def trimmed_tails(model, grids):
+    """Exact trimmed mass per side of each grid window, via the mixture CDF per
+    draw, then averaged - by linearity exactly the tails of d-bar (Eq. 5.5.19).
+    Returns (left (P,), right (P,)): P(X < grid[0]) and P(X > grid[-1]). The
+    window is symmetric in x around the pooled mean, not in mass - a skewed
+    marginal trims unequal tails, and the union over models shifts each model's
+    window off-centre relative to its own mean."""
+    mu, pvec, std, _, P, K = _flat(model)
+    left, right = np.empty(P), np.empty(P)
+    for j in range(P):
+        l, u = grids[j][0], grids[j][-1]
+        zl = (l - mu[:, :, j]) / (std[:, :, j] + 1e-12)
+        zu = (u - mu[:, :, j]) / (std[:, :, j] + 1e-12)
+        left[j]  = np.sum(pvec * ndtr(zl), axis=1).mean()
+        right[j] = np.sum(pvec * (1.0 - ndtr(zu)), axis=1).mean()
+    return np.clip(left, 0.0, 1.0), np.clip(right, 0.0, 1.0)
+
+
+def retained_mass(model, grids):
+    """Exact probability mass of each pooled marginal inside its grid window
+    (see `trimmed_tails`). Returns a (P,) array; trimmed mass is 1 - retained."""
+    left, right = trimmed_tails(model, grids)
+    return np.clip(1.0 - left - right, 0.0, 1.0)
 
 
 # --------------------------------------------------------------------------- #

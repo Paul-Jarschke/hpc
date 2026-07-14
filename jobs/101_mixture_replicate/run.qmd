@@ -293,7 +293,7 @@ meta = {
     "posterior_shapes": {k: list(v.shape) for k, v in post_np.items()},
     # bayesm_gibbs-specific provenance (matches run_single_experiment.py's meta fields)
     "r_total": r_total, "burn_in": burn_in, "thin": thin,
-    "rw_s": 2.93 / float(np.sqrt(P)), "frac_w": 0.1,
+    "rw_s": 2.38 / float(np.sqrt(P)), "frac_w": 0.1,
     "mean_beta_accept": round(mean_beta_accept, 4),
     "finished_at": datetime.now().isoformat(timespec="seconds"),
 }
