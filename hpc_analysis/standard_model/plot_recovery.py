@@ -933,6 +933,56 @@ def marginal_metric_boxplot(metric: str = "Hellinger", n_chains: int = 2,
     return p
 
 
+def retained_mass_boxplot(n_chains: int = 2, df=None, *, grid: str = "chebyshev",
+                          jitter: bool = True) -> ggplot:
+    """Realised probability mass of each model's own marginal retained inside the
+    evaluation-grid window (mc.retained_mass), vs the theoretical Chebyshev guarantee.
+
+    x-axis = sampler, faceted by parameter (1x4), free y per panel. Each box pools the
+    replicate seeds for that (param, sampler) cell; each point is one fit. Dashed line at
+    0.96 = the theoretical minimum guaranteed by Chebyshev's inequality at k=5
+    (1 - 1/5**2); values should sit at or above it. `grid` selects the evaluation-grid
+    scenario ('full' trivially retains ~100%; 'chebyshev' is the meaningful case).
+    """
+    df = load_recovery("marginal_distances") if df is None else df
+    if "grid" in df.columns:
+        df = df[df["grid"] == grid]
+    sub = df[df["n_chains"] == n_chains].copy()
+    if sub.empty:
+        raise ValueError(f"No marginal_distances rows for n_chains={n_chains}, grid={grid!r}.")
+    if "retained_mass_model" not in sub.columns:
+        raise ValueError("Column 'retained_mass_model' not in marginal_distances - "
+                         "re-gather data/out after the Chebyshev mass-guarantee fix.")
+
+    sampler_order = [s for s in SAMPLER_ORDER if s in set(sub["sampler"])]
+    param_order = [p for p in _PARAM_ORDER if p in set(sub["param"])]
+    sub["sampler"] = pd.Categorical(sub["sampler"], categories=sampler_order, ordered=True)
+    sub["param"] = pd.Categorical(sub["param"], categories=param_order, ordered=True)
+
+    counts = sub.groupby("sampler", observed=True)["data_seed"].nunique().to_dict()
+    print(f"[retained_mass_boxplot] c{n_chains} {grid}: seeds/box={counts}")
+
+    color_vals = [SAMPLER_COLORS[s] for s in sampler_order]
+
+    p = ggplot(sub, aes(x="sampler", y="retained_mass_model", color="sampler"))
+    if jitter:
+        p = p + geom_jitter(width=0.2, height=0, size=0.7, alpha=0.4)
+    p = (p
+         + geom_boxplot(fill="#FFFFFF00", outlier_alpha=0)
+         + geom_hline(yintercept=0.96, linetype="dashed", color="#555555", size=0.7)
+         + facet_wrap("param", ncol=4, scales="free_y", labeller="label_value")
+         + scale_color_manual(values=color_vals,
+                              labels=[SAMPLER_LABELS.get(s, s) for s in sampler_order])
+         + scale_x_discrete(labels=[SAMPLER_LABELS.get(s, s) for s in sampler_order])
+         + labs(x="Sampler", y="Retained mass", color="Sampler",
+                title=f"Retained Mass vs Chebyshev Guarantee ({grid} grid)")
+         + theme_bw()
+         + theme(figure_size=(12, 4.5), axis_text_x=element_text(size=7),
+                 plot_title=element_text(size=11))
+    )
+    return p
+
+
 def marginal_distances_faceted_by_metric(n_chains: int = 2, df=None, *,
                                           grid: str = "chebyshev") -> ggplot:
     """All five distance metrics in one figure.

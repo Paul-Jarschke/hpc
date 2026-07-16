@@ -38,6 +38,7 @@ from plot_recovery import (  # noqa: E402
     beta_coverage_by_param,
     marginal_metric_boxplot,
     marginal_distances_faceted_by_metric,
+    retained_mass_boxplot,
     MARGINAL_METRICS,
     runtime_by_sampler,
     consolidated_rmse_boxplot,
@@ -115,6 +116,14 @@ def main():
                  f"marginal_comparison/{GRID_FOLDER[grid]}/plots/all_metrics.png")
         except ValueError as e:
             print(f"  skip all_metrics ({grid}): {e}")
+
+    # Retained probability mass vs the theoretical Chebyshev guarantee (chebyshev grid
+    # only - the full grid trivially retains ~100%).
+    try:
+        save(retained_mass_boxplot(CHAINS, grid="chebyshev"),
+             f"marginal_comparison/{GRID_FOLDER['chebyshev']}/plots/retained_mass_boxplot.png")
+    except ValueError as e:
+        print(f"  skip retained_mass_boxplot: {e}")
 
     # Marginal-series convergence: ESS/R-hat grids (density x mean x variance) + density-only
     # figures, under marginal_comparison/ (density series once per grid).

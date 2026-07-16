@@ -413,6 +413,58 @@ def marginal_distance_summary_table(n_chains: int = CHAINS,
     ).reset_index(drop=True)
 
 
+def retained_mass_summary_table(n_chains: int = CHAINS, grid: str = "chebyshev") -> pd.DataFrame:
+    """Distribution of retained_mass_model (mc.retained_mass), by sampler, k_true and
+    parameter - the realised counterpart to the theoretical Chebyshev mass guarantee.
+
+    For each (k_true, param, sampler) cell across n_sim replicate seeds, summarises the
+    fraction of each fitted model's own marginal mass retained inside the evaluation-grid
+    window. frac_below_guarantee = fraction of seeds where retained mass fell BELOW the
+    theoretical minimum (k=5 -> 1 - 1/5**2 = 0.96) - should be ~0 if the Chebyshev fix is
+    working as intended. `grid` selects the evaluation-grid scenario ('full' trivially
+    retains ~100%; 'chebyshev' is the meaningful case).
+
+    Returns a tidy long DataFrame:
+        rows    = (k_true, param, sampler)
+        columns = min, q1, mean, median, q3, max, frac_below_guarantee, n_sim
+    """
+    df = load_recovery("marginal_distances")
+    if "grid" in df.columns:
+        df = df[df["grid"] == grid]
+    df = df[df["n_chains"] == n_chains].copy()
+    if "retained_mass_model" not in df.columns:
+        raise ValueError("Column 'retained_mass_model' not in marginal_distances - "
+                         "re-gather data/out after the Chebyshev mass-guarantee fix.")
+
+    def _agg(g):
+        r = g["retained_mass_model"]
+        return pd.Series({
+            "min":    r.min(),
+            "q1":     r.quantile(0.25),
+            "mean":   r.mean(),
+            "median": r.median(),
+            "q3":     r.quantile(0.75),
+            "max":    r.max(),
+            "frac_below_guarantee": (r < 0.96).mean(),
+            "n_sim":  len(r),
+        })
+
+    agg = (
+        df.groupby(["k_true", "param", "sampler"], observed=True)
+        .apply(_agg, include_groups=False)
+        .reset_index()
+    )
+    samplers_present = [s for s in SAMPLER_ORDER if s in agg["sampler"].unique()]
+    agg["sampler"] = pd.Categorical(agg["sampler"], categories=samplers_present, ordered=True)
+    agg["sampler_label"] = agg["sampler"].map(SAMPLER_LABELS)
+    agg = agg.sort_values(["k_true", "param", "sampler"])
+    stat_cols = ["min", "q1", "mean", "median", "q3", "max", "frac_below_guarantee"]
+    agg[stat_cols] = agg[stat_cols].round(5)
+    return agg[["k_true", "param", "sampler_label", *stat_cols, "n_sim"]].rename(
+        columns={"sampler_label": "sampler"}
+    ).reset_index(drop=True)
+
+
 def consolidated_rmse_table(n_chains: int = CHAINS) -> pd.DataFrame:
     """Consolidated RMSE across ALL elements of a parameter block (beta / Delta),
     by sampler and k_true (plus a pooled 'all' k_true row per sampler and block).
@@ -587,6 +639,14 @@ def main():
             path = out_dir / f"marginal_distance_summary_c{CHAINS}_kt{int(kt)}.csv"
             sub.to_csv(path, index=False)
             print(f"wrote {len(sub)} rows -> {path}")
+
+    # --- Retained-mass summary table (chebyshev grid only - full trivially retains ~100%) ---
+    out_dir = OUT_DIR_MARGINAL / GRID_FOLDER["chebyshev"] / "tables"
+    out_dir.mkdir(parents=True, exist_ok=True)
+    rmass = retained_mass_summary_table(grid="chebyshev")
+    path = out_dir / f"retained_mass_summary_c{CHAINS}.csv"
+    rmass.to_csv(path, index=False)
+    print(f"wrote {len(rmass)} rows -> {path}")
 
 
 if __name__ == "__main__":

@@ -31,6 +31,7 @@ from plot_recovery import (  # noqa: E402
     marginal_metric_boxplot,
     marginal_distance_by_ktrue,
     marginal_distances_faceted_by_metric,
+    retained_mass_boxplot,
     MARGINAL_METRICS,
     runtime_by_ktrue,
     runtime_samplers_by_ktrue,
@@ -113,6 +114,14 @@ def main():
                      f"marginal_comparison/{GRID_FOLDER[grid]}/plots/all_metrics_kt{kt}.png")
             except ValueError as e:
                 print(f"  skip all_metrics_kt{kt} ({grid}): {e}")
+
+    # Retained probability mass vs the theoretical Chebyshev guarantee (chebyshev grid
+    # only - the full grid trivially retains ~100%).
+    try:
+        save(retained_mass_boxplot(CHAINS, grid="chebyshev"),
+             f"marginal_comparison/{GRID_FOLDER['chebyshev']}/plots/retained_mass_boxplot.png")
+    except ValueError as e:
+        print(f"  skip retained_mass_boxplot: {e}")
 
     # Component-count: effective-K boxplot, est_k confusion by k_true, and the sorted
     # weight profiles (after-ECR + before/after) under components/.
