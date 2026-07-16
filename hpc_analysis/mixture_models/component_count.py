@@ -474,16 +474,16 @@ def write_tables(n_chains: int = 2) -> None:
 def make_plots(n_chains: int = 2) -> None:
     runs = per_run_counts(n_chains=n_chains)
     print("wrote", save(plot_k_eff_by_ktrue(n_chains, runs),
-                        f"{DIR_OUT_PLOTS}/k_eff_by_ktrue_c{n_chains}.png"))
+                        f"{DIR_OUT_PLOTS}/k_eff_by_ktrue.png"))
     # Confusion at the primary tau, plus all swept thresholds in one threshold x k_true grid.
     print("wrote", save(plot_est_k_confusion(n_chains, PRIMARY_THRESHOLD, runs),
-                        f"{DIR_OUT_PLOTS}/est_k_confusion_c{n_chains}.png"))
+                        f"{DIR_OUT_PLOTS}/est_k_confusion.png"))
     print("wrote", save(plot_est_k_confusion_all_tau(n_chains, THRESHOLDS, runs),
-                        f"{DIR_OUT_PLOTS}/est_k_confusion_all_tau_c{n_chains}.png"))
+                        f"{DIR_OUT_PLOTS}/est_k_confusion_all_tau.png"))
     print("wrote", save(plot_weight_profile_by_ktrue(n_chains),
-                        f"{DIR_OUT_PLOTS}/weight_profile_c{n_chains}.png"))
+                        f"{DIR_OUT_PLOTS}/weight_profile.png"))
     print("wrote", save(plot_weight_profile_before_after(n_chains),
-                        f"{DIR_OUT_PLOTS}/weight_profile_before_after_c{n_chains}.png"))
+                        f"{DIR_OUT_PLOTS}/weight_profile_before_after.png"))
 
 
 def main() -> None:

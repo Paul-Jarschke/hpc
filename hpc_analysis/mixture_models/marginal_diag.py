@@ -235,7 +235,7 @@ def make_plots(n_chains: int = 2) -> None:
     d = load_diag(n_chains)
     for metric in METRIC_CFG:
         print("wrote", save(_diag_grid(d, metric, n_chains),
-                            f"{plots}/marginal_{metric.lower()}_grid_c{n_chains}.png"))
+                            f"{plots}/marginal_{metric.lower()}_grid.png"))
 
 
 def main() -> None:

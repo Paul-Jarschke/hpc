@@ -53,33 +53,33 @@ GRID_FOLDER = {"full": "full", "chebyshev": "trimmed"}  # output subfolder per g
 
 def main():
     # Delta bias: 4x2 element grid, free y-scale per panel, transparent boxes, points by sampler.
-    save(delta_bias_faceted_by_element(CHAINS), f"delta/bias/plots/delta_bias_elements_c{CHAINS}.png")
+    save(delta_bias_faceted_by_element(CHAINS), f"delta/bias/plots/delta_bias_elements.png")
 
     # Delta posterior SD: same layout as bias grid.
-    save(delta_sd_faceted_by_element(CHAINS), f"delta/sd/plots/delta_sd_elements_c{CHAINS}.png")
+    save(delta_sd_faceted_by_element(CHAINS), f"delta/sd/plots/delta_sd_elements.png")
 
     # Delta absolute error: same layout, y = |post_mean - true_value| per seed.
-    save(delta_rmse_faceted_by_element(CHAINS), f"delta/rmse/plots/delta_rmse_elements_c{CHAINS}.png")
+    save(delta_rmse_faceted_by_element(CHAINS), f"delta/rmse/plots/delta_rmse_elements.png")
 
     # Delta coverage: bar chart, one bar per sampler per element, 95% reference line.
-    save(delta_coverage_faceted_by_element(CHAINS), f"delta/coverage/plots/delta_coverage_c{CHAINS}.png")
+    save(delta_coverage_faceted_by_element(CHAINS), f"delta/coverage/plots/delta_coverage.png")
 
     # Mu recovery (standard-model specific): bias boxplot + coverage bars per parameter.
-    save(mu_bias_by_param(CHAINS), f"mu/plots/mu_bias_c{CHAINS}.png")
-    save(mu_coverage_by_param(CHAINS), f"mu/plots/mu_coverage_c{CHAINS}.png")
+    save(mu_bias_by_param(CHAINS), f"mu/plots/mu_bias.png")
+    save(mu_coverage_by_param(CHAINS), f"mu/plots/mu_coverage.png")
 
     # Posterior Sigma recovery (standard-model specific): signed element errors,
     # one panel per lower-triangle element.
-    save(sigma_bias_faceted_by_element(CHAINS), f"sigma/plots/sigma_bias_elements_c{CHAINS}.png")
+    save(sigma_bias_faceted_by_element(CHAINS), f"sigma/plots/sigma_bias_elements.png")
 
     # Runtime: all samplers in one figure (log scale).
-    save(runtime_by_sampler(CHAINS), f"runtime/plots/runtime_by_sampler_c{CHAINS}.png")
+    save(runtime_by_sampler(CHAINS), f"runtime/plots/runtime_by_sampler.png")
 
     # Beta bias: 1x4 parameter grid, signed error distribution over seeds, 0 reference.
-    save(beta_bias_by_param(CHAINS), f"beta/bias/plots/beta_bias_c{CHAINS}.png")
+    save(beta_bias_by_param(CHAINS), f"beta/bias/plots/beta_bias.png")
 
     # Beta RMSE: 1x4 parameter grid, distribution over seeds.
-    save(beta_rmse_by_param(CHAINS), f"beta/rmse/plots/beta_rmse_c{CHAINS}.png")
+    save(beta_rmse_by_param(CHAINS), f"beta/rmse/plots/beta_rmse.png")
 
     # Beta posterior SD and correlation both derive from beta_summary.csv (large),
     # so load it once and feed both.
@@ -88,15 +88,15 @@ def main():
 
     # Beta posterior SD: mean over units of post_std, 1x4 parameter grid over seeds.
     sd_df = compute_beta_post_std(df_summary)
-    save(beta_sd_by_param(CHAINS, sd_df=sd_df), f"beta/sd/plots/beta_sd_c{CHAINS}.png")
+    save(beta_sd_by_param(CHAINS, sd_df=sd_df), f"beta/sd/plots/beta_sd.png")
 
     # Beta correlation.
     corr_df = compute_beta_correlation(df_summary)
     save(beta_correlation_by_param(CHAINS, corr_df=corr_df),
-         f"beta/correlation/plots/beta_correlation_c{CHAINS}.png")
+         f"beta/correlation/plots/beta_correlation.png")
 
     # Beta coverage: bar chart per parameter.
-    save(beta_coverage_by_param(CHAINS), f"beta/coverage/plots/beta_coverage_c{CHAINS}.png")
+    save(beta_coverage_by_param(CHAINS), f"beta/coverage/plots/beta_coverage.png")
 
     # Marginal comparison: all output under marginal_comparison/, once PER GRID scenario.
     # Per metric a sampler boxplot (x=sampler, 1x4 param facets) plus the all-metric grid.
@@ -107,12 +107,12 @@ def main():
             slug = metric.lower().replace("-", "").replace(" ", "_")
             try:
                 save(marginal_metric_boxplot(metric, CHAINS, grid=grid),
-                     f"marginal_comparison/{GRID_FOLDER[grid]}/plots/{slug}_boxplot_c{CHAINS}.png")
+                     f"marginal_comparison/{GRID_FOLDER[grid]}/plots/{slug}_boxplot.png")
             except ValueError as e:
                 print(f"  skip {slug}_boxplot ({grid}): {e}")
         try:
             save(marginal_distances_faceted_by_metric(CHAINS, grid=grid),
-                 f"marginal_comparison/{GRID_FOLDER[grid]}/plots/all_metrics_c{CHAINS}.png")
+                 f"marginal_comparison/{GRID_FOLDER[grid]}/plots/all_metrics.png")
         except ValueError as e:
             print(f"  skip all_metrics ({grid}): {e}")
 
@@ -127,9 +127,9 @@ def main():
     # Consolidated RMSE: one pooled per-run number per parameter block, saved into
     # each block's own rmse/plots folder.
     save(consolidated_rmse_boxplot("beta", CHAINS),
-         f"beta/rmse/plots/beta_consolidated_rmse_c{CHAINS}.png")
+         f"beta/rmse/plots/beta_consolidated_rmse.png")
     save(consolidated_rmse_boxplot("delta", CHAINS),
-         f"delta/rmse/plots/delta_consolidated_rmse_c{CHAINS}.png")
+         f"delta/rmse/plots/delta_consolidated_rmse.png")
 
     print("regenerated all figures -> hpc_analysis/standard_model/out/")
 

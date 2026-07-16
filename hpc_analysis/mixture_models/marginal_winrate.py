@@ -263,7 +263,7 @@ def main():
             comp = f"{challenger}_vs_{baseline}"
             try:
                 save(win_rate_plot(comp, tbl, grid),
-                     f"marginal_comparison/{GRID_FOLDER[grid]}/plots/win_rate_{comp}_c{CHAINS}.png")
+                     f"marginal_comparison/{GRID_FOLDER[grid]}/plots/win_rate_{comp}.png")
             except ValueError as e:
                 print(f"  skip win_rate_{comp} ({grid}): {e}")
         print("wrote win-rate plots -> marginal_comparison/plots/\n")

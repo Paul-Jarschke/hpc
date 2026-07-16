@@ -138,13 +138,12 @@ RECOVERY_FILES = {
     "marginal_diagnostics": "marginal_diagnostics.csv",
 }
 
-MARGINAL_METRICS = ["Hellinger", "KL", "JSD", "TVD", "Wasserstein1"]
+MARGINAL_METRICS = ["Hellinger", "KL", "JSD", "TVD"]
 MARGINAL_METRIC_LABELS = {
     "Hellinger": "Hellinger",
     "KL": "KL divergence",
     "JSD": "JS divergence",
     "TVD": "TVD",
-    "Wasserstein1": "Wasserstein W₁",
 }
 
 
@@ -1011,7 +1010,7 @@ def runtime_by_sampler(n_chains: int = 2, df: Optional[pd.DataFrame] = None, *,
 def main() -> None:
     print("== Runtime by sampler ==")
     p_rt = runtime_by_sampler()
-    print("wrote", save(p_rt, "runtime/plots/runtime_by_sampler_c2.png"))
+    print("wrote", save(p_rt, "runtime/plots/runtime_by_sampler.png"))
 
 
 # ----------------------------------------------------------------------------- #

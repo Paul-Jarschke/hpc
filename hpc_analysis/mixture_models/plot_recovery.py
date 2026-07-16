@@ -123,13 +123,12 @@ RECOVERY_FILES = {
     "pvec_means": "pvec_means.csv",
 }
 
-MARGINAL_METRICS = ["Hellinger", "KL", "JSD", "TVD", "Wasserstein1"]
+MARGINAL_METRICS = ["Hellinger", "KL", "JSD", "TVD"]
 MARGINAL_METRIC_LABELS = {
     "Hellinger": "Hellinger",
     "KL": "KL divergence",
     "JSD": "JS divergence",
     "TVD": "TVD",
-    "Wasserstein1": "Wasserstein W₁",
 }
 
 
@@ -816,7 +815,7 @@ def marginal_distance_by_ktrue(n_chains: int = 2, metric: str = "Hellinger",
     x-axis = k_true, boxplots dodged by sampler, faceted by parameter (4 panels).
     Each box pools ~100 replicate seeds; each data point is one fit.
     The `metric` argument selects which distance to plot; see MARGINAL_METRICS for options.
-    Hellinger is the primary metric (bounded in [0,1] and symmetric); KL/JSD/TVD/Wasserstein1
+    Hellinger is the primary metric (bounded in [0,1] and symmetric); KL/JSD/TVD
     are supplementary. `grid` selects the evaluation-grid scenario the distances were
     computed on ('full' or 'chebyshev'; every metric is stored for both).
     """

@@ -545,7 +545,7 @@ def marginal_distance_summary_table(n_chains: int = CHAINS,
     """Distribution of all five marginal distance metrics, by sampler and parameter.
 
     For each (param, sampler, metric) cell across n_sim replicate seeds, summarises
-    the distribution of KL/TVD/Hellinger/JSD/Wasserstein1 values: lower is better (fitted
+    the distribution of KL/TVD/Hellinger/JSD values: lower is better (fitted
     marginal closer to the true DGP marginal). Hellinger is bounded in [0,1]; the others are
     unbounded but comparable within a metric. `grid` selects the evaluation-grid scenario
     ('full' or 'chebyshev') the distances were computed on.
