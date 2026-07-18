@@ -1,46 +1,63 @@
 #!/usr/bin/env python3
-r"""Turn the gathered summary CSVs into booktabs LaTeX fragments.
+r"""Turn the gathered summary CSVs into FULL-detail booktabs LaTeX fragments.
 
 Usage (from the hpc repo root, after make_tables.py has run for both studies):
 
     python hpc_analysis/make_tex_tables.py --out /path/to/thesis/tables/sim
 
-Every fragment is a bare `tabular` environment. Caption, label and the
-surrounding `table` float stay in the thesis .tex, e.g.:
+Fragments are written into two subfolders of --out: `standard/` and `mixture/`.
+Each fragment is a bare `tabular` (small tables) or `longtable` (large tables)
+environment - caption/label stay in the thesis. Small tables go inside a float:
 
-    \begin{table}[htb]
-    \centering
-    \caption{...}
-    \label{tab:sim-std-mu}
-    \input{tables/sim/std_mu_recovery}
+    \begin{table}[htb]\centering
+      \caption{...}\label{tab:sim-std-delta}
+      \input{tables/sim/standard/delta_recovery}
     \end{table}
 
-Fragments written (skipped with a warning if the source CSV is missing):
+`longtable` fragments (the big per-element / per-metric / convergence tables) are
+`\input` directly - NOT inside a `table` float - and page-break on their own.
 
-  standard study (6.4)                 mixture study (6.5)
-  ------------------------------       ------------------------------
-  std_mu_recovery.tex                  mix_tvd_medians.tex
-  std_delta_recovery.tex               mix_keff.tex
-  std_convergence.tex                  mix_convergence.tex
-  std_runtime.tex                      mix_runtime.tex
-  std_tvd.tex
+Thesis preamble needed:
 
-Design choices
-  * numbers: 3 decimals for bias/MSE/TVD, 2 for R-hat, 0 for ESS,
-    1 for runtime minutes; MCSEs in parentheses behind the estimate.
-  * convergence tables: functional == "mean" only, averaged over the
-    four coefficients (median R-hat, frac converged, median bulk ESS,
-    frac ESS >= 400) - matching Section 6.3.
-  * runtime: seconds columns are converted to minutes.
-  * column names are matched case-insensitively and defensively, so the
-    script survives small schema changes; anything it cannot find it
-    reports instead of silently writing wrong numbers.
+    \usepackage{booktabs}   % \toprule / \midrule / \bottomrule
+    \usepackage{amsmath}    % \text{}, \widehat, \Delta, \Sigma
+    \usepackage{longtable}  % the big tables (see LONGTABLE list printed at the end)
+
+Two tiers of fragments are produced:
+
+  * FULL tables (every element/param/metric/scenario x sampler, with the
+    Monte-Carlo SEs) - the complete evidence behind each plot.
+  * AGGREGATE tables (prefix `agg_`) - the same information condensed where the
+    full detail is repetitive:
+      agg_recovery.tex        (standard)  one row per parameter block (mu/Delta/Sigma)
+                                          x sampler, aggregated over the block's
+                                          elements: mean/max |bias|, max MCSE,
+                                          mean/max MSE.
+      agg_delta_recovery.tex  (mixture)   same aggregation over the 8 Delta elements,
+                                          per K_true x sampler.
+      agg_convergence.tex     (both)      per sampler (x K_true), pooled over ALL
+                                          functionals x coefficients: median/max R-hat,
+                                          share of converged cells, median/min bulk
+                                          ESS, share ESS >= 400.
+      agg_marginal.tex        (both)      median distance (median over seeds, then
+                                          median over the 4 coefficients) per
+                                          grid x metric (x K_true), samplers as columns.
+
+Design
+  * recovery cells: `bias (mcse)` and `mse (mcse)` (4 dp); Unicode element labels
+    Δ₁,₁ / Σ₁,₁ become $\Delta_{1,1}$ / $\Sigma_{1,1}$.
+  * distribution tables: full min / Q1 / mean / median / Q3 / max (+ extra columns).
+  * mixture study: one COMBINED table per family with k_true as a grouped leading
+    column (blank on repeat); standard study is a single k_true = 1 cell.
+  * columns matched case-insensitively/defensively; a table whose source CSV or
+    columns are missing is reported and skipped, never written with wrong numbers.
 """
 from __future__ import annotations
 
 import argparse
 import glob
 import os
+import re
 import sys
 
 import numpy as np
@@ -50,16 +67,22 @@ REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 STD = os.path.join(REPO, "hpc_analysis", "standard_model", "out")
 MIX = os.path.join(REPO, "hpc_analysis", "mixture_models", "out")
 
-SAMPLER_ORDER = ["bayesm", "Replication", "bayesm_gibbs", "NUTS", "nuts", "HMC", "hmc"]
 SAMPLER_LABEL = {
     "bayesm": "bayesm", "bayesm_gibbs": "Replication", "replication": "Replication",
     "nuts": "NUTS", "hmc": "HMC",
 }
+SAMP_CAT = ["bayesm", "Replication", "NUTS", "HMC"]     # display order
 KT_ORDER = [1, 2, 3, 5]
+METRIC_CAT = ["Hellinger", "KL", "JSD", "TVD"]
+FUNC_CAT = ["mean", "sd", "q05", "q50", "q95"]
+FUNC_LABEL = {"mean": "mean", "sd": "SD", "q05": "Q05", "q50": "median", "q95": "Q95"}
+
+_LONGTABLE_THRESHOLD = 34          # switch tabular -> longtable above this many body rows
+_LONGTABLES: list[str] = []        # collected for the closing note
 
 
 # ----------------------------------------------------------------------
-# helpers
+# IO helpers
 # ----------------------------------------------------------------------
 def _find(patterns: list[str]) -> str | None:
     for pat in patterns:
@@ -86,290 +109,649 @@ def _col(df: pd.DataFrame, *candidates: str) -> str | None:
     return None
 
 
-def _label(s: str) -> str:
+def _need(df: pd.DataFrame, what: str, *cols: str | None) -> bool:
+    if any(c is None for c in cols):
+        print(f"  !! {what}: unexpected columns {list(df.columns)}")
+        return False
+    return True
+
+
+# ----------------------------------------------------------------------
+# formatting helpers
+# ----------------------------------------------------------------------
+def _label(s) -> str:
     return SAMPLER_LABEL.get(str(s).strip().lower(), str(s))
 
 
-def _order_samplers(df: pd.DataFrame, col: str = "sampler") -> pd.DataFrame:
-    df = df.copy()
-    df["__lab"] = df[col].map(_label)
-    order = ["bayesm", "Replication", "NUTS", "HMC"]
-    df["__lab"] = pd.Categorical(df["__lab"], categories=order, ordered=True)
-    return df.sort_values("__lab").drop(columns="__lab")
-
-
-def _fmt(x, nd: int) -> str:
+def _num(x, nd: int) -> str:
     if x is None or (isinstance(x, float) and not np.isfinite(x)):
-        return "$\\infty$"
+        return "$\\infty$" if (isinstance(x, float) and x == np.inf) else "{--}"
     return f"{x:.{nd}f}"
 
 
-def _write(out_dir: str, name: str, header: str, rows: list[str], colspec: str) -> None:
-    body = " \\\\\n".join(rows) + " \\\\"
-    tex = (
-        f"\\begin{{tabular}}{{{colspec}}}\n\\toprule\n{header} \\\\\n\\midrule\n"
-        f"{body}\n\\bottomrule\n\\end{{tabular}}\n"
-    )
-    path = os.path.join(out_dir, name)
-    with open(path, "w") as fh:
-        fh.write(tex)
-    print(f"  -> wrote {name}")
+def _pm(v, m, nd: int) -> str:
+    """`value (mcse)` (both to nd decimals); just `value` if mcse absent."""
+    s = _num(v, nd)
+    if m is not None and isinstance(m, (int, float, np.floating)) and np.isfinite(m):
+        s += f" ({_num(m, nd)})"
+    return s
 
 
-# ----------------------------------------------------------------------
-# standard study
-# ----------------------------------------------------------------------
-def std_mu_recovery(out: str) -> None:
-    df = _read(_find([f"{STD}/mu/**/mu_recovery_summary_c2.csv"]), "standard mu recovery")
-    if df is None:
-        return
-    p, s = _col(df, "param"), _col(df, "sampler")
-    b, bm = _col(df, "bias"), _col(df, "mcse_bias", "bias_mcse", "mcse(bias)")
-    m, mm = _col(df, "mse"), _col(df, "mcse_mse", "mse_mcse", "mcse(mse)")
-    if None in (p, s, b, m):
-        print(f"  !! std mu: unexpected columns {list(df.columns)}")
-        return
+_SUB_TO_ASCII = str.maketrans("₀₁₂₃₄₅₆₇₈₉", "0123456789")
+_GREEK = {"Δ": r"\Delta", "Σ": r"\Sigma"}
+
+
+def _tex_escape(s: str) -> str:
+    return (s.replace("\\", r"\textbackslash{}").replace("_", r"\_")
+             .replace("&", r"\&").replace("%", r"\%").replace("#", r"\#"))
+
+
+def _tex_label(s) -> str:
+    """`Δ₁,₁ (z1:Alt1)` -> `$\\Delta_{1,1}$ (z1:Alt1)`; plain strings pass through."""
+    s = str(s)
+    m = re.match(r"^([ΔΣ])([₀-₉,]+)\s*(.*)$", s)
+    if not m:
+        return _tex_escape(s)
+    sym, subs, rest = m.groups()
+    math = f"${_GREEK[sym]}_{{{subs.translate(_SUB_TO_ASCII)}}}$"
+    return (math + " " + _tex_escape(rest)).strip()
+
+
+def _samp_ordered(df: pd.DataFrame, col: str = "sampler") -> pd.DataFrame:
+    """Map the sampler column to display labels and make it a canonical categorical."""
+    df = df.copy()
+    df[col] = df[col].map(_label)
+    df[col] = pd.Categorical(df[col], categories=SAMP_CAT, ordered=True)
+    return df
+
+
+def _grouped_rows(df: pd.DataFrame, group_cols: list[str], group_fmt: list, value_fn) -> list[str]:
+    """One `&`-joined TeX row per DataFrame row. Leading `group_cols` are printed only
+    when they change (blank on repeat); `value_fn(row)` returns the remaining cells."""
+    prev = [object()] * len(group_cols)
     rows = []
-    for param in df[p].unique():
-        sub = _order_samplers(df[df[p] == param], s)
-        for i, (_, r) in enumerate(sub.iterrows()):
-            lead = param if i == 0 else ""
-            bias = _fmt(r[b], 3) + (f" ({_fmt(r[bm], 3)})" if bm else "")
-            mse = _fmt(r[m], 3) + (f" ({_fmt(r[mm], 3)})" if mm else "")
-            rows.append(f"{lead} & {_label(r[s])} & {bias} & {mse}")
-    _write(out, "std_mu_recovery.tex",
-           "Coefficient & Sampler & Bias (MCSE) & MSE (MCSE)", rows, "llcc")
-
-
-def std_delta_recovery(out: str) -> None:
-    # The delta_bias_mse table is WIDE: one row per element, with per-sampler columns
-    # bias_<sampler>, mcse_bias_<sampler>, mse_<sampler>, ... (sampler suffix lowercased).
-    df = _read(_find([f"{STD}/delta/bias/**/delta_bias_mse_c2.csv"]), "standard delta recovery")
-    if df is None:
-        return
-    bias_cols = [c for c in df.columns if c.startswith("bias_")]
-    if not bias_cols:
-        print(f"  !! std delta: unexpected columns {list(df.columns)}")
-        return
-    samplers = [c[len("bias_"):] for c in bias_cols]          # e.g. ['bayesm','nuts','hmc']
-    order = ["bayesm", "Replication", "NUTS", "HMC"]
-    samplers.sort(key=lambda x: order.index(_label(x)) if _label(x) in order else 99)
-    rows = []
-    for samp in samplers:
-        bcol, mccol, mcol = f"bias_{samp}", f"mcse_bias_{samp}", f"mse_{samp}"
-        maxabs = df[bcol].abs().max()
-        maxmcse = df[mccol].max() if mccol in df.columns else np.nan
-        rows.append(
-            f"{_label(samp)} & {_fmt(maxabs, 3)} & {_fmt(maxmcse, 3)} & "
-            f"{_fmt(df[mcol].min(), 3)}--{_fmt(df[mcol].max(), 3)}"
-        )
-    _write(out, "std_delta_recovery.tex",
-           "Sampler & max $|$Bias$|$ & max MCSE & MSE range", rows, "lccc")
-
-
-def _convergence_rows(rhat: pd.DataFrame, ess: pd.DataFrame, by_kt: bool) -> list[str]:
-    f = _col(rhat, "functional", "series")
-    rhat = rhat[rhat[f].str.lower() == "mean"]
-    f2 = _col(ess, "functional", "series")
-    ess = ess[ess[f2].str.lower() == "mean"]
-    s = _col(rhat, "sampler")
-    keys = (["k_true", s] if by_kt else [s])
-    r_agg = rhat.groupby(keys, observed=True)[
-        [_col(rhat, "median_rhat"), _col(rhat, "frac_converged")]
-    ].mean().reset_index()
-    e_med = _col(ess, "median_ess_bulk", "median_ess")
-    e_frac = _col(ess, "frac_ess_bulk_ge_400", "frac_ess_ge_400")
-    e_agg = ess.groupby(keys, observed=True)[[e_med, e_frac]].mean().reset_index()
-    merged = r_agg.merge(e_agg, on=keys)
-    rows = []
-    if by_kt:
-        for kt in KT_ORDER:
-            sub = _order_samplers(merged[merged["k_true"] == kt], s)
-            for i, (_, r) in enumerate(sub.iterrows()):
-                lead = str(kt) if i == 0 else ""
-                rows.append(
-                    f"{lead} & {_label(r[s])} & {_fmt(r[_col(rhat,'median_rhat')], 2)} & "
-                    f"{_fmt(r[_col(rhat,'frac_converged')], 2)} & "
-                    f"{_fmt(r[e_med], 0)} & {_fmt(r[e_frac], 2)}"
-                )
-    else:
-        for _, r in _order_samplers(merged, s).iterrows():
-            rows.append(
-                f"{_label(r[s])} & {_fmt(r[_col(rhat,'median_rhat')], 2)} & "
-                f"{_fmt(r[_col(rhat,'frac_converged')], 2)} & "
-                f"{_fmt(r[e_med], 0)} & {_fmt(r[e_frac], 2)}"
-            )
+    for _, r in df.iterrows():
+        lead, changed = [], False
+        for i, c in enumerate(group_cols):
+            v = r[c]
+            if changed or v != prev[i]:
+                lead.append(group_fmt[i](v))
+                changed = True
+            else:
+                lead.append("")
+            prev[i] = v
+        rows.append(" & ".join(lead + list(value_fn(r))))
     return rows
 
 
-def std_convergence(out: str) -> None:
-    rhat = _read(_find([f"{STD}/marginal_comparison/**/marginal_rhat_summary_c2.csv"]),
-                 "standard marginal R-hat")
-    ess = _read(_find([f"{STD}/marginal_comparison/**/marginal_ess_summary_c2.csv"]),
-                "standard marginal ESS")
-    if rhat is None or ess is None:
-        return
-    rows = _convergence_rows(rhat, ess, by_kt=False)
-    _write(out, "std_convergence.tex",
-           "Sampler & median $\\widehat{R}$ & frac.\\ $\\widehat{R} \\leq 1.1$ & "
-           "median bulk ESS & frac.\\ ESS $\\geq 400$", rows, "lcccc")
-
-
-def std_runtime(out: str) -> None:
-    df = _read(_find([f"{STD}/runtime/**/runtime_summary_c2.csv"]), "standard runtime")
-    if df is None:
-        return
-    s = _col(df, "sampler")
-    med = _col(df, "median_min", "median_runtime_min", "median", "median_s", "median_runtime_s")
-    q1 = _col(df, "q1", "q25", "q1_min", "q25_min", "q1_s", "q25_s")
-    q3 = _col(df, "q3", "q75", "q3_min", "q75_min", "q3_s", "q75_s")
-    mx = _col(df, "max", "max_min", "max_s")
-    if None in (s, med):
-        print(f"  !! std runtime: unexpected columns {list(df.columns)}")
-        return
-    to_min = 1 / 60.0 if med.endswith("_s") or df[med].max() > 500 else 1.0
-    rows = []
-    for _, r in _order_samplers(df, s).iterrows():
-        iqr = (f"{_fmt(r[q1]*to_min,1)}--{_fmt(r[q3]*to_min,1)}" if q1 and q3 else "--")
-        rows.append(f"{_label(r[s])} & {_fmt(r[med]*to_min,1)} & {iqr} & "
-                    f"{_fmt(r[mx]*to_min,1) if mx else '--'}")
-    _write(out, "std_runtime.tex", "Sampler & Median & IQR & Max", rows, "lccc")
-
-
-def std_tvd(out: str) -> None:
-    df = _read(_find([f"{STD}/marginal_comparison/trimmed/tables/marginal_distance_summary_c2.csv"]),
-               "standard TVD (chebyshev grid)")
-    if df is None:
-        return
-    met, s, p = _col(df, "metric"), _col(df, "sampler"), _col(df, "param")
-    md = _col(df, "median")
-    sub = df[df[met].str.upper() == "TVD"]
-    rows = []
-    for param in sub[p].unique():
-        block = _order_samplers(sub[sub[p] == param], s)
-        cells = " & ".join(_fmt(r[md], 3) for _, r in block.iterrows())
-        rows.append(f"{param} & {cells}")
-    _write(out, "std_tvd.tex", "Coefficient & bayesm & NUTS & HMC", rows, "lccc")
+def _emit(out: str, name: str, colspec: str, header: str, rows: list[str],
+          *, longtable: bool | None = None) -> None:
+    if longtable is None:
+        longtable = len(rows) > _LONGTABLE_THRESHOLD
+    body = " \\\\\n".join(rows) + " \\\\"
+    if longtable:
+        _LONGTABLES.append(name)
+        tex = (
+            f"\\begin{{longtable}}{{{colspec}}}\n\\toprule\n{header} \\\\\n\\midrule\n"
+            f"\\endfirsthead\n\\toprule\n{header} \\\\\n\\midrule\n\\endhead\n"
+            f"\\midrule\n\\multicolumn{{{colspec.count('l') + colspec.count('c') + colspec.count('r')}}}"
+            f"{{r}}{{\\emph{{continued on next page}}}} \\\\\n\\endfoot\n"
+            f"\\bottomrule\n\\endlastfoot\n{body}\n\\end{{longtable}}\n"
+        )
+    else:
+        tex = (
+            f"\\begin{{tabular}}{{{colspec}}}\n\\toprule\n{header} \\\\\n\\midrule\n"
+            f"{body}\n\\bottomrule\n\\end{{tabular}}\n"
+        )
+    with open(os.path.join(out, name), "w", encoding="utf-8") as fh:
+        fh.write(tex)
+    assert tex.isascii(), f"{name}: non-ASCII survived label conversion"
+    print(f"  -> wrote {name}{'  [longtable]' if longtable else ''}")
 
 
 # ----------------------------------------------------------------------
-# mixture study
+# generic builders
 # ----------------------------------------------------------------------
-def mix_tvd_medians(out: str) -> None:
-    rows = []
-    for kt in KT_ORDER:
-        df = _read(_find([f"{MIX}/marginal_comparison/trimmed/tables/"
-                          f"marginal_distance_summary_c2_kt{kt}.csv"]),
-                   f"mixture TVD kt{kt}")
+def _recovery_from_wide(df: pd.DataFrame, has_kt: bool) -> pd.DataFrame | None:
+    """Melt a wide delta_bias_mse table (bias_<s>, mcse_bias_<s>, mse_<s>, mcse_mse_<s>)
+    into long rows [k_true?, element, sampler, bias, mcse_bias, mse, mcse_mse]."""
+    bias_cols = [c for c in df.columns if c.startswith("bias_")]
+    if not bias_cols or "element" not in df.columns:
+        return None
+    samplers = [c[len("bias_"):] for c in bias_cols]
+    recs = []
+    for _, r in df.iterrows():
+        for s in samplers:
+            rec = {"element": r["element"], "sampler": _label(s),
+                   "bias": r.get(f"bias_{s}"), "mcse_bias": r.get(f"mcse_bias_{s}"),
+                   "mse": r.get(f"mse_{s}"), "mcse_mse": r.get(f"mcse_mse_{s}")}
+            if has_kt:
+                rec["k_true"] = r["k_true"]
+            recs.append(rec)
+    return pd.DataFrame(recs)
+
+
+def _recovery_table(out: str, name: str, df: pd.DataFrame, elem_col: str, has_kt: bool,
+                    *, extra=(), extra_hdr=(), nd: int = 4) -> None:
+    """Per-element bias(MCSE)/MSE(MCSE) recovery table [+ extra plain columns]."""
+    df = _samp_ordered(df)
+    sort_cols = (["k_true"] if has_kt else []) + [elem_col, "sampler"]
+    df = df.sort_values(sort_cols, kind="stable")
+    group_cols = (["k_true"] if has_kt else []) + [elem_col]
+    group_fmt = ([lambda v: str(int(v))] if has_kt else []) + [_tex_label]
+
+    def value_fn(r):
+        cells = [str(r["sampler"]), _pm(r["bias"], r.get("mcse_bias"), nd),
+                 _pm(r["mse"], r.get("mcse_mse"), nd)]
+        cells += [_num(r[c], nd) for c in extra]
+        return cells
+
+    lead = ("$K_{\\text{true}}$ & " if has_kt else "")
+    elem_hdr = "Coefficient" if "\\Delta" in _tex_label(df[elem_col].iloc[0]) or elem_col == "param" else "Element"
+    header = (lead + f"{elem_hdr} & Sampler & Bias (MCSE) & MSE (MCSE)"
+              + "".join(f" & {h}" for h in extra_hdr))
+    colspec = ("c" if has_kt else "") + "ll" + "c" * (2 + len(extra))
+    _emit(out, name, colspec, header, _grouped_rows(df, group_cols, group_fmt, value_fn))
+
+
+_STATS = ["min", "q1", "mean", "median", "q3", "max"]
+_STATS_HDR = "min & Q1 & mean & median & Q3 & max"
+
+
+def _dist_table(out: str, name: str, df: pd.DataFrame, id_cols: list[str],
+                id_fmt: list, id_hdr: str, has_kt: bool, *, nd: int = 4,
+                extra=(), extra_hdr="") -> None:
+    """Grouped 5-number-summary table (min/Q1/mean/median/Q3/max [+ extra]), sampler
+    as the innermost printed column."""
+    df = _samp_ordered(df)
+    sort_cols = (["k_true"] if has_kt else []) + id_cols + ["sampler"]
+    df = df.sort_values(sort_cols, kind="stable")
+    group_cols = (["k_true"] if has_kt else []) + id_cols
+    group_fmt = ([lambda v: str(int(v))] if has_kt else []) + id_fmt
+    stat_cols = [_col(df, s) or s for s in _STATS]
+
+    def value_fn(r):
+        cells = [str(r["sampler"])] + [_num(r[c], nd) for c in stat_cols]
+        cells += [_num(r[c], nd) for c in extra]
+        return cells
+
+    lead = ("$K_{\\text{true}}$ & " if has_kt else "")
+    header = lead + f"{id_hdr} & Sampler & {_STATS_HDR}" + (f" & {extra_hdr}" if extra_hdr else "")
+    colspec = ("c" if has_kt else "") + "l" * len(id_cols) + "l" + "c" * (6 + len(extra))
+    _emit(out, name, colspec, header, _grouped_rows(df, group_cols, group_fmt, value_fn))
+
+
+# ----------------------------------------------------------------------
+# recovery tables
+# ----------------------------------------------------------------------
+def delta_recovery(out: str, root: str, has_kt: bool) -> None:
+    pat = (f"{root}/delta/bias/**/delta_bias_mse_c2_all.csv" if has_kt
+           else f"{root}/delta/bias/**/delta_bias_mse_c2.csv")
+    df = _read(_find([pat]), "delta recovery")
+    if df is None:
+        return
+    long = _recovery_from_wide(df, has_kt)
+    if long is None:
+        print(f"  !! delta recovery: unexpected columns {list(df.columns)}")
+        return
+    _recovery_table(out, "delta_recovery.tex", long, "element", has_kt)
+
+
+def mu_recovery(out: str) -> None:
+    df = _read(_find([f"{STD}/mu/**/mu_recovery_summary_c2.csv"]), "mu recovery")
+    if df is None:
+        return
+    if not _need(df, "mu recovery", _col(df, "param"), _col(df, "sampler"),
+                 _col(df, "bias"), _col(df, "mse")):
+        return
+    ps = _col(df, "mean_post_std")
+    _recovery_table(out, "mu_recovery.tex", df, "param", has_kt=False,
+                    extra=([ps] if ps else ()), extra_hdr=(["mean SD"] if ps else ()))
+
+
+def sigma_recovery(out: str) -> None:
+    df = _read(_find([f"{STD}/sigma/**/sigma_recovery_summary_c2.csv"]), "sigma recovery")
+    if df is None:
+        return
+    if not _need(df, "sigma recovery", _col(df, "element"), _col(df, "sampler"),
+                 _col(df, "bias"), _col(df, "mse")):
+        return
+    mt, me = _col(df, "mean_true"), _col(df, "mean_empirical")
+    extra = [c for c in (mt, me) if c]
+    hdr = [h for c, h in ((mt, "mean $\\Sigma$"), (me, "mean emp.")) if c]
+    _recovery_table(out, "sigma_recovery.tex", df, "element", has_kt=False,
+                    extra=extra, extra_hdr=hdr)
+
+
+# ----------------------------------------------------------------------
+# distribution tables
+# ----------------------------------------------------------------------
+def delta_sd(out: str, root: str, has_kt: bool) -> None:
+    pat = (f"{root}/delta/sd/**/delta_sd_summary_c2_all.csv" if has_kt
+           else f"{root}/delta/sd/**/delta_sd_summary_c2.csv")
+    df = _read(_find([pat]), "delta posterior SD")
+    if df is None:
+        return
+    if not _need(df, "delta SD", _col(df, "element"), _col(df, "sampler")):
+        return
+    _dist_table(out, "delta_sd.tex", df, ["element"], [_tex_label], "Coefficient", has_kt)
+
+
+def runtime(out: str, root: str, has_kt: bool) -> None:
+    df = _read(_find([f"{root}/runtime/**/runtime_summary_c2.csv"]), "runtime (minutes)")
+    if df is None:
+        return
+    if not _need(df, "runtime", _col(df, "sampler")):
+        return
+    _dist_table(out, "runtime.tex", df, [], [], "", has_kt, nd=2)
+
+
+def marginal_distances(out: str, root: str, has_kt: bool, grid: str) -> None:
+    sub = "trimmed" if grid == "trimmed" else "full"
+    fn = (f"marginal_distance_summary_c2_all.csv" if has_kt
+          else "marginal_distance_summary_c2.csv")
+    df = _read(_find([f"{root}/marginal_comparison/{sub}/tables/{fn}"]),
+               f"marginal distances ({grid})")
+    if df is None:
+        return
+    p, m = _col(df, "param"), _col(df, "metric")
+    if not _need(df, f"marginal {grid}", p, m, _col(df, "sampler")):
+        return
+    df = df.copy()
+    df[m] = pd.Categorical(df[m], categories=METRIC_CAT, ordered=True)
+    _dist_table(out, f"marginal_distances_{grid}.tex", df, [m, p],
+                [str, _tex_escape], "Metric & Coefficient", has_kt, nd=4)
+
+
+def retained_mass(out: str, root: str, has_kt: bool) -> None:
+    df = _read(_find([f"{root}/marginal_comparison/trimmed/tables/retained_mass_summary_c2.csv"]),
+               "retained mass")
+    if df is None:
+        return
+    p = _col(df, "param")
+    if not _need(df, "retained mass", p, _col(df, "sampler")):
+        return
+    fb = _col(df, "frac_below_guarantee")
+    _dist_table(out, "retained_mass.tex", df, [p], [_tex_escape], "Coefficient", has_kt,
+                nd=4, extra=([fb] if fb else ()), extra_hdr=("frac $<0.96$" if fb else ""))
+
+
+# ----------------------------------------------------------------------
+# KL = inf counts
+# ----------------------------------------------------------------------
+def kl_inf(out: str, root: str, has_kt: bool) -> None:
+    frames = []
+    for grid, sub in (("full", "full"), ("trimmed", "trimmed")):
+        df = _read(_find([f"{root}/marginal_comparison/{sub}/tables/kl_inf_summary_c2.csv"]),
+                   f"KL-inf counts ({grid})")
         if df is None:
             return
-        met, s, md = _col(df, "metric"), _col(df, "sampler"), _col(df, "median")
-        sub = df[df[met].str.upper() == "TVD"].groupby(s, observed=True)[md].mean().reset_index()
-        sub = _order_samplers(sub, s)
-        cells = " & ".join(_fmt(r[md], 3) for _, r in sub.iterrows())
-        rows.append(f"{kt} & {cells}")
-    _write(out, "mix_tvd_medians.tex",
-           "$K_{\\text{true}}$ & bayesm & Replication & NUTS & HMC", rows, "ccccc")
+        df = df.copy()
+        df["grid"] = grid
+        frames.append(df)
+    df = pd.concat(frames, ignore_index=True)
+    p = _col(df, "param")
+    ni, nt, ir = _col(df, "n_inf"), _col(df, "n_total"), _col(df, "inf_rate")
+    if not _need(df, "KL-inf", p, _col(df, "sampler"), ni, nt, ir):
+        return
+    df = _samp_ordered(df)
+    df["grid"] = pd.Categorical(df["grid"], categories=["full", "trimmed"], ordered=True)
+    sort_cols = (["k_true"] if has_kt else []) + ["grid", p, "sampler"]
+    df = df.sort_values(sort_cols, kind="stable")
+    group_cols = (["k_true"] if has_kt else []) + ["grid", p]
+    group_fmt = ([lambda v: str(int(v))] if has_kt else []) + [str, _tex_escape]
+
+    def value_fn(r):
+        return [str(r["sampler"]), str(int(r[ni])), str(int(r[nt])), _num(r[ir], 3)]
+
+    lead = ("$K_{\\text{true}}$ & " if has_kt else "")
+    header = lead + "Grid & Coefficient & Sampler & $n_\\infty$ & $n$ & rate"
+    colspec = ("c" if has_kt else "") + "lll" + "ccc"
+    _emit(out, "kl_inf.tex", colspec, header, _grouped_rows(df, group_cols, group_fmt, value_fn))
 
 
-def mix_keff(out: str) -> None:
-    df = _read(_find([f"{MIX}/**/recovery_summary*.csv", f"{MIX}/**/component*summary*.csv",
-                      f"{MIX}/**/*keff*.csv"]), "mixture K_eff summary")
+# ----------------------------------------------------------------------
+# convergence (R-hat + ESS)
+# ----------------------------------------------------------------------
+def convergence_rhat(out: str, root: str, has_kt: bool) -> None:
+    df = _read(_find([f"{root}/marginal_comparison/**/marginal_rhat_summary_c2.csv"]),
+               "convergence R-hat")
     if df is None:
         return
-    s = _col(df, "sampler")
-    kt = _col(df, "k_true", "ktrue")
-    mean_k = _col(df, "mean_k_eff", "mean_keff", "k_eff_mean")
-    med_k = _col(df, "median_k_eff", "median_keff")
-    sd_k = _col(df, "sd_k_eff", "sd_keff", "k_eff_sd")
-    if None in (s, kt, mean_k):
-        print(f"  !! mixture K_eff: unexpected columns {list(df.columns)}")
+    f, p = _col(df, "functional"), _col(df, "param")
+    med, q75, mx = _col(df, "median_rhat"), _col(df, "q75_rhat"), _col(df, "max_rhat")
+    fc = _col(df, "frac_converged")
+    if not _need(df, "R-hat", f, p, _col(df, "sampler"), med, mx, fc):
         return
-    rows = []
-    for k in KT_ORDER:
-        sub = _order_samplers(df[df[kt] == k], s)
-        for i, (_, r) in enumerate(sub.iterrows()):
-            lead = str(k) if i == 0 else ""
-            extra = ""
-            if med_k:
-                extra += f" & {_fmt(r[med_k], 2)}"
-            if sd_k:
-                extra += f" & {_fmt(r[sd_k], 2)}"
-            rows.append(f"{lead} & {_label(r[s])} & {_fmt(r[mean_k], 2)}{extra}")
-    hdr = "$K_{\\text{true}}$ & Sampler & mean $K_{\\text{eff}}$"
-    spec = "clc"
-    if med_k:
-        hdr += " & median $K_{\\text{eff}}$"
-        spec += "c"
-    if sd_k:
-        hdr += " & sd"
-        spec += "c"
-    _write(out, "mix_keff.tex", hdr, rows, spec)
+    df = _samp_ordered(df)
+    df[f] = pd.Categorical(df[f], categories=FUNC_CAT, ordered=True)
+    sort_cols = (["k_true"] if has_kt else []) + [f, p, "sampler"]
+    df = df.sort_values(sort_cols, kind="stable")
+    group_cols = (["k_true"] if has_kt else []) + [f, p]
+    group_fmt = ([lambda v: str(int(v))] if has_kt else []) + [lambda v: FUNC_LABEL.get(v, str(v)), _tex_escape]
+
+    def value_fn(r):
+        cells = [str(r["sampler"]), _num(r[med], 3)]
+        cells += [_num(r[q75], 3)] if q75 else []
+        cells += [_num(r[mx], 3), _num(r[fc], 2)]
+        return cells
+
+    lead = ("$K_{\\text{true}}$ & " if has_kt else "")
+    q = " & Q75 $\\widehat{R}$" if q75 else ""
+    header = (lead + "Functional & Coefficient & Sampler & median $\\widehat{R}$" + q
+              + " & max $\\widehat{R}$ & frac.\\ $\\widehat{R}\\leq1.1$")
+    colspec = ("c" if has_kt else "") + "lll" + "c" * (3 + (1 if q75 else 0))
+    _emit(out, "convergence_rhat.tex", colspec, header, _grouped_rows(df, group_cols, group_fmt, value_fn))
 
 
-def mix_convergence(out: str) -> None:
-    rhat = _read(_find([f"{MIX}/marginal_comparison/full/tables/marginal_rhat_summary_c2.csv",
-                        f"{MIX}/marginal_comparison/**/marginal_rhat_summary_c2.csv"]),
-                 "mixture marginal R-hat")
-    ess = _read(_find([f"{MIX}/marginal_comparison/full/tables/marginal_ess_summary_c2.csv",
-                       f"{MIX}/marginal_comparison/**/marginal_ess_summary_c2.csv"]),
-                "mixture marginal ESS")
+def convergence_ess(out: str, root: str, has_kt: bool) -> None:
+    df = _read(_find([f"{root}/marginal_comparison/**/marginal_ess_summary_c2.csv"]),
+               "convergence ESS")
+    if df is None:
+        return
+    f, p = _col(df, "functional"), _col(df, "param")
+    mb, mt = _col(df, "median_ess_bulk"), _col(df, "median_ess_tail")
+    fr = _col(df, "frac_ess_bulk_ge_400", "frac_ess_ge_400")
+    bs = _col(df, "median_ess_bulk_per_s")
+    if not _need(df, "ESS", f, p, _col(df, "sampler"), mb, fr):
+        return
+    df = _samp_ordered(df)
+    df[f] = pd.Categorical(df[f], categories=FUNC_CAT, ordered=True)
+    sort_cols = (["k_true"] if has_kt else []) + [f, p, "sampler"]
+    df = df.sort_values(sort_cols, kind="stable")
+    group_cols = (["k_true"] if has_kt else []) + [f, p]
+    group_fmt = ([lambda v: str(int(v))] if has_kt else []) + [lambda v: FUNC_LABEL.get(v, str(v)), _tex_escape]
+
+    def value_fn(r):
+        cells = [str(r["sampler"]), _num(r[mb], 0)]
+        cells += [_num(r[mt], 0)] if mt else []
+        cells += [_num(r[fr], 2)]
+        cells += [_num(r[bs], 2)] if bs else []
+        return cells
+
+    lead = ("$K_{\\text{true}}$ & " if has_kt else "")
+    tcol = " & median tail ESS" if mt else ""
+    scol = " & bulk ESS/s" if bs else ""
+    header = (lead + "Functional & Coefficient & Sampler & median bulk ESS" + tcol
+              + " & frac.\\ ESS $\\geq400$" + scol)
+    colspec = ("c" if has_kt else "") + "lll" + "c" * (2 + (1 if mt else 0) + (1 if bs else 0))
+    _emit(out, "convergence_ess.tex", colspec, header, _grouped_rows(df, group_cols, group_fmt, value_fn))
+
+
+# ----------------------------------------------------------------------
+# mixture component-count
+# ----------------------------------------------------------------------
+def component_recovery(out: str) -> None:
+    df = _read(_find([f"{MIX}/**/component_recovery_summary_c2.csv", f"{MIX}/**/recovery_summary*.csv"]),
+               "component recovery")
+    if df is None:
+        return
+    kt, s = _col(df, "k_true"), _col(df, "sampler")
+    mk, mek = _col(df, "mean_k_eff"), _col(df, "median_k_eff")
+    sk, mest = _col(df, "sd_k_eff"), _col(df, "mean_est_k")
+    fco, fov, fun = _col(df, "frac_correct"), _col(df, "frac_over"), _col(df, "frac_under")
+    if not _need(df, "component recovery", kt, s, mk, mest, fco):
+        return
+    df = _samp_ordered(df).sort_values([kt, "sampler"], kind="stable")
+
+    def value_fn(r):
+        return [str(r["sampler"]), _num(r[mk], 3), _num(r[mek], 3) if mek else "{--}",
+                _num(r[sk], 3) if sk else "{--}", _num(r[mest], 3),
+                _num(r[fco], 3), _num(r[fov], 3) if fov else "{--}",
+                _num(r[fun], 3) if fun else "{--}"]
+
+    header = ("$K_{\\text{true}}$ & Sampler & mean $K_{\\text{eff}}$ & median $K_{\\text{eff}}$ "
+              "& SD $K_{\\text{eff}}$ & mean $\\hat K$ & frac.\\ correct & frac.\\ over & frac.\\ under")
+    _emit(out, "component_recovery.tex", "clccccccc", header,
+          _grouped_rows(df, [kt], [lambda v: str(int(v))], value_fn))
+
+
+def component_confusion(out: str) -> None:
+    df = _read(_find([f"{MIX}/**/component_confusion_c2.csv"]), "component confusion")
+    if df is None:
+        return
+    kt, s = _col(df, "k_true"), _col(df, "sampler")
+    pcols = [c for c in df.columns if re.fullmatch(r"p_est\d", c)]
+    if not _need(df, "component confusion", kt, s) or not pcols:
+        return
+    pcols = sorted(pcols)
+    df = _samp_ordered(df).sort_values([kt, "sampler"], kind="stable")
+
+    def value_fn(r):
+        return [str(r["sampler"])] + [_num(r[c], 3) for c in pcols]
+
+    header = ("$K_{\\text{true}}$ & Sampler & "
+              + " & ".join(f"$\\hat K{{=}}{c[-1]}$" for c in pcols))
+    _emit(out, "component_confusion.tex", "cl" + "c" * len(pcols), header,
+          _grouped_rows(df, [kt], [lambda v: str(int(v))], value_fn))
+
+
+def component_thresholds(out: str) -> None:
+    df = _read(_find([f"{MIX}/**/component_threshold_sensitivity_c2.csv"]),
+               "component threshold sensitivity")
+    if df is None:
+        return
+    kt, s, th = _col(df, "k_true"), _col(df, "sampler"), _col(df, "threshold")
+    mest, fco = _col(df, "mean_est_k"), _col(df, "frac_correct")
+    if not _need(df, "component thresholds", kt, s, th, mest, fco):
+        return
+    df = _samp_ordered(df).sort_values([kt, "sampler", th], kind="stable")
+
+    def value_fn(r):
+        return [str(r["sampler"]), _num(r[th], 3), _num(r[mest], 3), _num(r[fco], 3)]
+
+    header = "$K_{\\text{true}}$ & Sampler & threshold & mean $\\hat K$ & frac.\\ correct"
+    _emit(out, "component_thresholds.tex", "cl" + "ccc", header,
+          _grouped_rows(df, [kt, s], [lambda v: str(int(v)), _label], value_fn))
+
+
+# ----------------------------------------------------------------------
+# aggregate (summary) tables
+# ----------------------------------------------------------------------
+_AGG_HDR = "$n$ & mean $|$Bias$|$ & max $|$Bias$|$ & max MCSE & mean MSE & max MSE"
+
+
+def _recovery_agg_table(out: str, name: str, long_df: pd.DataFrame, keys: list[str],
+                        key_hdr: str, key_spec: str, key_fmt: list) -> None:
+    """Aggregate a long recovery frame over its elements: one row per (*keys, sampler)
+    with mean/max |bias|, the max MCSE(bias) (conservative uncertainty bound for the
+    aggregated biases) and mean/max MSE."""
+    df = _samp_ordered(long_df)
+
+    def _a(x):
+        return pd.Series({
+            "n": len(x),
+            "mab": x["bias"].abs().mean(), "xab": x["bias"].abs().max(),
+            "xmc": x["mcse_bias"].max() if "mcse_bias" in x.columns else np.nan,
+            "mms": x["mse"].mean(), "xms": x["mse"].max(),
+        })
+
+    agg = (df.groupby(keys + ["sampler"], observed=True)
+             .apply(_a, include_groups=False).reset_index()
+             .sort_values(keys + ["sampler"], kind="stable"))
+
+    def value_fn(r):
+        return [str(r["sampler"]), str(int(r["n"])), _num(r["mab"], 4), _num(r["xab"], 4),
+                _num(r["xmc"], 4), _num(r["mms"], 4), _num(r["xms"], 4)]
+
+    _emit(out, name, key_spec + "l" + "c" * 6, f"{key_hdr} & Sampler & {_AGG_HDR}",
+          _grouped_rows(agg, keys, key_fmt, value_fn))
+
+
+def agg_recovery_standard(out: str) -> None:
+    """Standard study: bias/MSE aggregated over the elements of each parameter block
+    (mu: 4 params, Delta: 8 elements, Sigma: 10 lower-triangle elements)."""
+    frames = []
+    d = _read(_find([f"{STD}/delta/bias/**/delta_bias_mse_c2.csv"]), "aggregate: delta recovery")
+    if d is not None:
+        long = _recovery_from_wide(d, has_kt=False)
+        if long is not None:
+            frames.append(long.assign(block=r"$\Delta$")[
+                ["block", "sampler", "bias", "mcse_bias", "mse", "mcse_mse"]])
+    for what, blk in (("mu", r"$\mu$"), ("sigma", r"$\Sigma$")):
+        df = _read(_find([f"{STD}/{what}/**/{what}_recovery_summary_c2.csv"]),
+                   f"aggregate: {what} recovery")
+        if df is None or not all(_col(df, c) for c in ("sampler", "bias", "mse")):
+            continue
+        keep = [c for c in ("sampler", "bias", "mcse_bias", "mse", "mcse_mse") if c in df.columns]
+        frames.append(df[keep].assign(block=blk))
+    if not frames:
+        return
+    allb = pd.concat(frames, ignore_index=True)
+    allb["block"] = pd.Categorical(
+        allb["block"], categories=[r"$\mu$", r"$\Delta$", r"$\Sigma$"], ordered=True)
+    _recovery_agg_table(out, "agg_recovery.tex", allb, ["block"], "Block", "l", [str])
+
+
+def agg_delta_recovery_mix(out: str) -> None:
+    """Mixture study: Delta bias/MSE aggregated over the 8 elements, per K_true."""
+    d = _read(_find([f"{MIX}/delta/bias/**/delta_bias_mse_c2_all.csv"]),
+              "aggregate: delta recovery")
+    if d is None:
+        return
+    long = _recovery_from_wide(d, has_kt=True)
+    if long is None:
+        print(f"  !! aggregate delta: unexpected columns {list(d.columns)}")
+        return
+    _recovery_agg_table(out, "agg_delta_recovery.tex", long, ["k_true"],
+                        "$K_{\\text{true}}$", "c", [lambda v: str(int(v))])
+
+
+def agg_convergence(out: str, root: str, has_kt: bool) -> None:
+    """Convergence pooled over ALL (functional x coefficient) cells per sampler:
+    typical (median R-hat / median bulk ESS over cells) + worst case (max R-hat /
+    min bulk ESS) + pass-rate shares averaged over cells."""
+    rhat = _read(_find([f"{root}/marginal_comparison/**/marginal_rhat_summary_c2.csv"]),
+                 "aggregate: R-hat")
+    ess = _read(_find([f"{root}/marginal_comparison/**/marginal_ess_summary_c2.csv"]),
+                "aggregate: ESS")
     if rhat is None or ess is None:
         return
-    rows = _convergence_rows(rhat, ess, by_kt=True)
-    _write(out, "mix_convergence.tex",
-           "$K_{\\text{true}}$ & Sampler & median $\\widehat{R}$ & "
-           "frac.\\ $\\widehat{R} \\leq 1.1$ & median bulk ESS & frac.\\ ESS $\\geq 400$",
-           rows, "clcccc")
+    med, mx, fc = _col(rhat, "median_rhat"), _col(rhat, "max_rhat"), _col(rhat, "frac_converged")
+    mb = _col(ess, "median_ess_bulk", "median_ess")
+    fr = _col(ess, "frac_ess_bulk_ge_400", "frac_ess_ge_400")
+    if not _need(rhat, "agg R-hat", med, mx, fc) or not _need(ess, "agg ESS", mb, fr):
+        return
+    rhat, ess = _samp_ordered(rhat), _samp_ordered(ess)
+    keys = (["k_true"] if has_kt else []) + ["sampler"]
+    r_agg = (rhat.groupby(keys, observed=True)
+                 .agg(med_r=(med, "median"), max_r=(mx, "max"), fc=(fc, "mean")).reset_index())
+    e_agg = (ess.groupby(keys, observed=True)
+                .agg(med_e=(mb, "median"), min_e=(mb, "min"), fr=(fr, "mean")).reset_index())
+    df = r_agg.merge(e_agg, on=keys).sort_values(keys, kind="stable")
+
+    def value_fn(r):
+        return [str(r["sampler"]), _num(r["med_r"], 3), _num(r["max_r"], 2), _num(r["fc"], 2),
+                _num(r["med_e"], 0), _num(r["min_e"], 0), _num(r["fr"], 2)]
+
+    lead = "$K_{\\text{true}}$ & " if has_kt else ""
+    header = (lead + "Sampler & median $\\widehat{R}$ & max $\\widehat{R}$ & "
+              "frac.\\ $\\widehat{R}\\leq1.1$ & median bulk ESS & min bulk ESS & "
+              "frac.\\ ESS $\\geq400$")
+    group_cols = ["k_true"] if has_kt else []
+    group_fmt = [lambda v: str(int(v))] if has_kt else []
+    _emit(out, "agg_convergence.tex", ("c" if has_kt else "") + "l" + "c" * 6, header,
+          _grouped_rows(df, group_cols, group_fmt, value_fn))
 
 
-def mix_runtime(out: str) -> None:
-    df = _read(_find([f"{MIX}/runtime/**/runtime_summary*.csv", f"{MIX}/**/runtime*summary*.csv"]),
-               "mixture runtime")
-    if df is None:
+def agg_marginal(out: str, root: str, has_kt: bool) -> None:
+    """Marginal distances condensed: per grid x metric (x K_true), the median distance
+    (median across seeds per cell, then median over the 4 coefficients); samplers as
+    columns."""
+    frames = []
+    for grid in ("full", "trimmed"):
+        fn = ("marginal_distance_summary_c2_all.csv" if has_kt
+              else "marginal_distance_summary_c2.csv")
+        df = _read(_find([f"{root}/marginal_comparison/{grid}/tables/{fn}"]),
+                   f"aggregate: marginal distances ({grid})")
+        if df is not None:
+            frames.append(df.assign(grid=grid))
+    if not frames:
         return
-    s, kt = _col(df, "sampler"), _col(df, "k_true", "ktrue")
-    med = _col(df, "median_min", "median", "median_s")
-    q1 = _col(df, "q1", "q25", "q1_min", "q25_min", "q1_s")
-    q3 = _col(df, "q3", "q75", "q3_min", "q75_min", "q3_s")
-    mx = _col(df, "max", "max_min", "max_s")
-    if None in (s, kt, med):
-        print(f"  !! mixture runtime: unexpected columns {list(df.columns)}")
+    df = pd.concat(frames, ignore_index=True)
+    met, md = _col(df, "metric"), _col(df, "median")
+    if not _need(df, "agg marginal", met, md, _col(df, "sampler")):
         return
-    to_min = 1 / 60.0 if med.endswith("_s") or df[med].max() > 500 else 1.0
-    rows = []
-    for k in KT_ORDER:
-        sub = _order_samplers(df[df[kt] == k], s)
-        for i, (_, r) in enumerate(sub.iterrows()):
-            lead = str(k) if i == 0 else ""
-            iqr = (f"{_fmt(r[q1]*to_min,1)}--{_fmt(r[q3]*to_min,1)}" if q1 and q3 else "--")
-            rows.append(f"{lead} & {_label(r[s])} & {_fmt(r[med]*to_min,1)} & {iqr} & "
-                        f"{_fmt(r[mx]*to_min,1) if mx else '--'}")
-    _write(out, "mix_runtime.tex",
-           "$K_{\\text{true}}$ & Sampler & Median & IQR & Max", rows, "clccc")
+    df = _samp_ordered(df)
+    df[met] = pd.Categorical(df[met], categories=METRIC_CAT, ordered=True)
+    keys = ["grid", met] + (["k_true"] if has_kt else [])
+    agg = (df.groupby(keys + ["sampler"], observed=True)[md]
+             .median().reset_index(name="med"))
+    piv = (agg.pivot_table(index=keys, columns="sampler", values="med", observed=True)
+              .reset_index().sort_values(keys, kind="stable"))
+    samp_cols = [c for c in SAMP_CAT if c in piv.columns]
+
+    if has_kt:
+        group_cols, group_fmt = ["grid", met], [str, str]
+
+        def value_fn(r):
+            return [str(int(r["k_true"]))] + [_num(r[c], 3) for c in samp_cols]
+
+        header = "Grid & Metric & $K_{\\text{true}}$ & " + " & ".join(samp_cols)
+        colspec = "llc" + "c" * len(samp_cols)
+    else:
+        group_cols, group_fmt = ["grid"], [str]
+
+        def value_fn(r):
+            return [str(r[met])] + [_num(r[c], 3) for c in samp_cols]
+
+        header = "Grid & Metric & " + " & ".join(samp_cols)
+        colspec = "ll" + "c" * len(samp_cols)
+    _emit(out, "agg_marginal.tex", colspec, header,
+          _grouped_rows(piv, group_cols, group_fmt, value_fn))
 
 
 # ----------------------------------------------------------------------
 def main() -> int:
-    ap = argparse.ArgumentParser()
+    ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--out", default=os.path.join(REPO, "hpc_analysis", "tex_tables"),
-                    help="directory for the .tex fragments (e.g. the thesis tables/sim dir)")
+                    help="directory for the .tex fragments (e.g. the thesis tables/sim dir); "
+                         "'standard/' and 'mixture/' subfolders are created inside it")
     args = ap.parse_args()
-    os.makedirs(args.out, exist_ok=True)
-    print(f"writing fragments to {args.out}")
+    std_out = os.path.join(args.out, "standard")
+    mix_out = os.path.join(args.out, "mixture")
+    os.makedirs(std_out, exist_ok=True)
+    os.makedirs(mix_out, exist_ok=True)
+    print(f"writing FULL tables to {args.out} (subfolders: standard/ + mixture/)")
 
-    print("standard study")
-    std_mu_recovery(args.out)
-    std_delta_recovery(args.out)
-    std_convergence(args.out)
-    std_runtime(args.out)
-    std_tvd(args.out)
+    print("standard study -> standard/")
+    delta_recovery(std_out, STD, has_kt=False)
+    mu_recovery(std_out)
+    sigma_recovery(std_out)
+    delta_sd(std_out, STD, has_kt=False)
+    runtime(std_out, STD, has_kt=False)
+    for grid in ("full", "trimmed"):
+        marginal_distances(std_out, STD, has_kt=False, grid=grid)
+    retained_mass(std_out, STD, has_kt=False)
+    kl_inf(std_out, STD, has_kt=False)
+    convergence_rhat(std_out, STD, has_kt=False)
+    convergence_ess(std_out, STD, has_kt=False)
+    agg_recovery_standard(std_out)
+    agg_convergence(std_out, STD, has_kt=False)
+    agg_marginal(std_out, STD, has_kt=False)
 
-    print("mixture study")
-    mix_tvd_medians(args.out)
-    mix_keff(args.out)
-    mix_convergence(args.out)
-    mix_runtime(args.out)
+    print("mixture study -> mixture/")
+    delta_recovery(mix_out, MIX, has_kt=True)
+    delta_sd(mix_out, MIX, has_kt=True)
+    runtime(mix_out, MIX, has_kt=True)
+    for grid in ("full", "trimmed"):
+        marginal_distances(mix_out, MIX, has_kt=True, grid=grid)
+    retained_mass(mix_out, MIX, has_kt=True)
+    kl_inf(mix_out, MIX, has_kt=True)
+    convergence_rhat(mix_out, MIX, has_kt=True)
+    convergence_ess(mix_out, MIX, has_kt=True)
+    component_recovery(mix_out)
+    component_confusion(mix_out)
+    component_thresholds(mix_out)
+    agg_delta_recovery_mix(mix_out)
+    agg_convergence(mix_out, MIX, has_kt=True)
+    agg_marginal(mix_out, MIX, has_kt=True)
+
+    if _LONGTABLES:
+        print("\nlongtable fragments (\\input directly, not inside a table float; "
+              "needs \\usepackage{longtable}):")
+        for n in dict.fromkeys(_LONGTABLES):          # dedupe, preserve order
+            print(f"  - {n}")
     return 0
 
 
