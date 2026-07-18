@@ -26,9 +26,7 @@ import marginal_diag  # noqa: E402
 
 OUT_DIR_DELTA_BIAS     = DIR_FIG / "delta" / "bias"     / "tables"
 OUT_DIR_DELTA_SD       = DIR_FIG / "delta" / "sd"       / "tables"
-OUT_DIR_DELTA_RMSE     = DIR_FIG / "delta" / "rmse"     / "tables"
 OUT_DIR_RUNTIME        = DIR_FIG / "runtime" / "tables"
-OUT_DIR_BETA_RMSE        = DIR_FIG / "beta" / "rmse"        / "tables"
 OUT_DIR_MARGINAL         = DIR_FIG / "marginal_comparison"   # per-grid subfolder added below
 
 _PARAM_ORDER = ["Alt1", "Alt2", "Alt3", "Price"]
@@ -38,6 +36,26 @@ GRIDS = ["full", "chebyshev"]  # marginal-distance evaluation-grid scenarios
 GRID_FOLDER = {"full": "full", "chebyshev": "trimmed"}  # output subfolder per grid
 SAMPLER_ORDER = ["bayesm", "bayesm_gibbs", "nuts", "hmc"]
 SAMPLER_LABELS = {"bayesm": "bayesm", "bayesm_gibbs": "Replication", "nuts": "NUTS", "hmc": "HMC"}
+
+
+def _bias_mse_stats(d: pd.Series) -> dict:
+    """Point estimates and Monte Carlo SEs of bias and MSE (Morris et al. 2019, Table 6),
+    from the per-replication differences d_i = post_mean_i - true_value_i (each evaluated
+    against the per-replication truth theta_i):
+
+        bias = mean(d),    mcse_bias = std(d,   ddof=1) / sqrt(n_sim)
+        mse  = mean(d^2),  mcse_mse  = std(d^2, ddof=1) / sqrt(n_sim)
+    """
+    d = np.asarray(d, dtype=float)
+    n = d.size
+    sq = d ** 2
+    return {
+        "bias":      d.mean(),
+        "mcse_bias": d.std(ddof=1) / np.sqrt(n),
+        "mse":       sq.mean(),
+        "mcse_mse":  sq.std(ddof=1) / np.sqrt(n),
+        "n_sim":     n,
+    }
 
 
 def runtime_summary_table(n_chains: int = CHAINS) -> pd.DataFrame:
@@ -55,6 +73,7 @@ def runtime_summary_table(n_chains: int = CHAINS) -> pd.DataFrame:
         return pd.Series({
             "min":    r.min(),
             "q1":     r.quantile(0.25),
+            "mean":   r.mean(),
             "median": r.median(),
             "q3":     r.quantile(0.75),
             "max":    r.max(),
@@ -71,7 +90,7 @@ def runtime_summary_table(n_chains: int = CHAINS) -> pd.DataFrame:
     agg["sampler"] = pd.Categorical(agg["sampler"], categories=samplers_present, ordered=True)
     agg["sampler_label"] = agg["sampler"].map(SAMPLER_LABELS)
     agg = agg.sort_values(["k_true", "sampler"])
-    stat_cols = ["min", "q1", "median", "q3", "max"]
+    stat_cols = ["min", "q1", "mean", "median", "q3", "max"]
     agg[stat_cols] = agg[stat_cols].round(2)
     return agg[["k_true", "sampler_label", *stat_cols, "n_runs"]].rename(
         columns={"sampler_label": "sampler"}
@@ -120,132 +139,37 @@ def delta_sd_summary_table(n_chains: int = CHAINS) -> pd.DataFrame:
     return agg[["k_true", "element", "sampler", *stat_cols, "n_sim"]].reset_index(drop=True)
 
 
-def delta_rmse_summary_table(n_chains: int = CHAINS) -> pd.DataFrame:
-    """Distribution of absolute error |post_mean - true_value| for every Delta element.
+def delta_bias_mse_table(n_chains: int = CHAINS) -> pd.DataFrame:
+    """Bias, MSE and their Monte Carlo SEs for every Delta element, by sampler and k_true.
 
-    For each (k_true, element, sampler) cell the statistics summarize |bias| values
-    across all replicate seeds. Unlike the bias table (which reports the mean signed
-    error and its MCSE), this captures the typical magnitude of error regardless of
-    direction, matching what is shown in the RMSE boxplots.
-
-    Returns a tidy long DataFrame:
-        rows    = (k_true, element, sampler)
-        columns = min, q1, mean, median, q3, max, n_sim
-    """
-    df = load_recovery("delta")
-    df = df[df["n_chains"] == n_chains].copy()
-    df["element"] = df.apply(lambda r: delta_element_label(r["demo"], r["param"]), axis=1)
-    df["abs_error"] = df["bias"].abs()
-
-    def _agg(g):
-        a = g["abs_error"]
-        return pd.Series({
-            "min":    a.min(),
-            "q1":     a.quantile(0.25),
-            "mean":   a.mean(),
-            "median": a.median(),
-            "q3":     a.quantile(0.75),
-            "max":    a.max(),
-            "n_sim":  len(a),
-        })
-
-    agg = (
-        df.groupby(["k_true", "element", "sampler"])
-        .apply(_agg, include_groups=False)
-        .reset_index()
-    )
-    samplers_present = [s for s in SAMPLER_ORDER if s in agg["sampler"].unique()]
-    agg["sampler"] = pd.Categorical(agg["sampler"], categories=samplers_present, ordered=True)
-    agg["sampler"] = agg["sampler"].map(SAMPLER_LABELS)
-    agg = agg.sort_values(["k_true", "element", "sampler"])
-    stat_cols = ["min", "q1", "mean", "median", "q3", "max"]
-    agg[stat_cols] = agg[stat_cols].round(4)
-    return agg[["k_true", "element", "sampler", *stat_cols, "n_sim"]].reset_index(drop=True)
-
-
-def delta_bias_mcse_table(n_chains: int = CHAINS) -> pd.DataFrame:
-    """Bias and Monte Carlo SE for every Delta element, by sampler and k_true.
-
-    For each (sampler, k_true, element) cell across n_sim replicate seeds:
-        bias = mean(post_mean - true_value)
-        mcse = std(post_mean - true_value) / sqrt(n_sim)   [SE of the bias estimate]
+    For each (sampler, k_true, element) cell across n_sim replicate seeds, from the
+    per-seed differences d_i = post_mean_i - true_value_i (Morris et al. 2019, Table 6):
+        bias      = mean(d_i)
+        mcse_bias = std(d_i,   ddof=1) / sqrt(n_sim)
+        mse       = mean(d_i^2)
+        mcse_mse  = std(d_i^2, ddof=1) / sqrt(n_sim)
 
     Returns a wide DataFrame:
         rows    = (k_true, element)
-        columns = MultiIndex (sampler, metric) with metric in {bias, mcse, n_sim}
+        columns = {bias, mcse_bias, mse, mcse_mse, n_sim}_{sampler}
     """
     df = load_recovery("delta")
     df = df[df["n_chains"] == n_chains].copy()
     df["element"] = df.apply(lambda r: delta_element_label(r["demo"], r["param"]), axis=1)
 
-    def _agg(g):
-        b = g["bias"]
-        n = len(b)
-        return pd.Series({
-            "bias":  b.mean(),
-            "mcse":  b.std(ddof=1) / np.sqrt(n),
-            "n_sim": n,
-        })
-
     agg = (
         df.groupby(["k_true", "element", "sampler"])
-        .apply(_agg, include_groups=False)
+        .apply(lambda g: pd.Series(_bias_mse_stats(g["bias"])), include_groups=False)
         .reset_index()
     )
 
-    # Wide format: one (bias, mcse, n_sim) triple per sampler
-    wide = agg.pivot_table(
-        index=["k_true", "element"],
-        columns="sampler",
-        values=["bias", "mcse", "n_sim"],
-    )
-    # Reorder columns: sampler-major, metric-minor
+    metrics = ["bias", "mcse_bias", "mse", "mcse_mse", "n_sim"]
+    wide = agg.pivot_table(index=["k_true", "element"], columns="sampler", values=metrics)
     samplers = [s for s in SAMPLER_ORDER if s in agg["sampler"].unique()]
-    wide = wide.reindex(columns=pd.MultiIndex.from_product([["bias", "mcse", "n_sim"], samplers]))
-    wide = wide.round(4)
+    wide = wide.reindex(columns=pd.MultiIndex.from_product([metrics, samplers]))
+    wide = wide.round(6)
     wide.columns = [f"{metric}_{SAMPLER_LABELS.get(s, s)}" for metric, s in wide.columns]
     return wide.reset_index()
-
-
-def beta_rmse_summary_table(n_chains: int = CHAINS) -> pd.DataFrame:
-    """Distribution of per-run RMSE for each beta parameter, by sampler and k_true.
-
-    RMSE is pre-aggregated over 330 units in beta_recovery.csv. This table
-    summarises those per-run values across replicate seeds.
-
-    Returns a tidy long DataFrame:
-        rows    = (k_true, param, sampler)
-        columns = min, q1, mean, median, q3, max, n_sim
-    """
-    df = load_recovery("beta")
-    df = df[df["n_chains"] == n_chains].copy()
-
-    def _agg(g):
-        r = g["rmse"]
-        return pd.Series({
-            "min":    r.min(),
-            "q1":     r.quantile(0.25),
-            "mean":   r.mean(),
-            "median": r.median(),
-            "q3":     r.quantile(0.75),
-            "max":    r.max(),
-            "n_sim":  len(r),
-        })
-
-    agg = (
-        df.groupby(["k_true", "param", "sampler"], observed=True)
-        .apply(_agg, include_groups=False)
-        .reset_index()
-    )
-    samplers_present = [s for s in SAMPLER_ORDER if s in agg["sampler"].unique()]
-    params_present = [p for p in _PARAM_ORDER if p in agg["param"].unique()]
-    agg["sampler"] = pd.Categorical(agg["sampler"], categories=samplers_present, ordered=True)
-    agg["param"] = pd.Categorical(agg["param"], categories=params_present, ordered=True)
-    agg["sampler"] = agg["sampler"].map(SAMPLER_LABELS)
-    agg = agg.sort_values(["k_true", "param", "sampler"])
-    stat_cols = ["min", "q1", "mean", "median", "q3", "max"]
-    agg[stat_cols] = agg[stat_cols].round(4)
-    return agg[["k_true", "param", "sampler", *stat_cols, "n_sim"]].reset_index(drop=True)
 
 
 def marginal_distance_summary_table(n_chains: int = CHAINS,
@@ -384,78 +308,21 @@ def kl_inf_summary_table(n_chains: int = CHAINS, grid: str = "chebyshev") -> pd.
     ).reset_index(drop=True)
 
 
-def consolidated_rmse_table(n_chains: int = CHAINS) -> pd.DataFrame:
-    """Consolidated RMSE across ALL elements of a parameter block (beta / Delta),
-    by sampler and k_true (plus a pooled 'all' k_true row per sampler and block).
-
-    Per run the block's elements are pooled into one RMSE (see
-    plot_recovery.consolidated_rmse_by_run); across the replicate runs of a cell
-    this reports the distribution of that per-run RMSE plus `rmse_pooled` =
-    sqrt(mean of squared per-run RMSEs) - the single-number grand RMSE of the cell.
-
-    Returns a tidy long DataFrame:
-        rows    = (block, k_true | 'all', sampler)
-        columns = rmse_pooled, min, q1, mean, median, q3, max, n_sim
-    """
-    from plot_recovery import consolidated_rmse_by_run
-
-    df = consolidated_rmse_by_run(n_chains)
-    both = pd.concat([df, df.assign(k_true="all")], ignore_index=True)
-
-    def _agg(g):
-        a = g["rmse"]
-        return pd.Series({
-            "rmse_pooled": float(np.sqrt((a ** 2).mean())),
-            "min":    a.min(),
-            "q1":     a.quantile(0.25),
-            "mean":   a.mean(),
-            "median": a.median(),
-            "q3":     a.quantile(0.75),
-            "max":    a.max(),
-            "n_sim":  len(a),
-        })
-
-    agg = (both.groupby(["block", "k_true", "sampler"])
-           .apply(_agg, include_groups=False)
-           .reset_index())
-    samplers_present = [s for s in SAMPLER_ORDER if s in agg["sampler"].unique()]
-    agg["sampler"] = pd.Categorical(agg["sampler"], categories=samplers_present, ordered=True)
-    agg["sampler"] = agg["sampler"].map(SAMPLER_LABELS)
-    agg = agg.sort_values(["block", "k_true", "sampler"])
-    stat_cols = ["rmse_pooled", "min", "q1", "mean", "median", "q3", "max"]
-    agg[stat_cols] = agg[stat_cols].round(4)
-    return agg[["block", "k_true", "sampler", *stat_cols, "n_sim"]].reset_index(drop=True)
-
-
 def main():
     OUT_DIR_DELTA_BIAS.mkdir(parents=True, exist_ok=True)
     OUT_DIR_DELTA_SD.mkdir(parents=True, exist_ok=True)
-    OUT_DIR_DELTA_RMSE.mkdir(parents=True, exist_ok=True)
     OUT_DIR_RUNTIME.mkdir(parents=True, exist_ok=True)
 
-    # --- Delta bias / MCSE tables ---
-    tbl = delta_bias_mcse_table()
+    # --- Delta bias + MSE tables (bias, MCSE(bias), MSE, MCSE(MSE) per sampler) ---
+    tbl = delta_bias_mse_table()
 
-    path = OUT_DIR_DELTA_BIAS / f"delta_bias_mcse_c{CHAINS}_all.csv"
+    path = OUT_DIR_DELTA_BIAS / f"delta_bias_mse_c{CHAINS}_all.csv"
     tbl.to_csv(path, index=False)
     print(f"wrote {len(tbl)} rows -> {path}")
 
     for kt in sorted(tbl["k_true"].unique()):
         sub = tbl[tbl["k_true"] == kt].drop(columns="k_true")
-        path = OUT_DIR_DELTA_BIAS / f"delta_bias_mcse_c{CHAINS}_kt{int(kt)}.csv"
-        sub.to_csv(path, index=False)
-        print(f"wrote {len(sub)} rows -> {path}")
-
-    # --- Delta absolute error / RMSE tables ---
-    rmse = delta_rmse_summary_table()
-
-    path = OUT_DIR_DELTA_RMSE / f"delta_rmse_summary_c{CHAINS}_all.csv"
-    rmse.to_csv(path, index=False)
-    print(f"wrote {len(rmse)} rows -> {path}")
-
-    for kt in sorted(rmse["k_true"].unique()):
-        sub = rmse[rmse["k_true"] == kt].drop(columns="k_true")
-        path = OUT_DIR_DELTA_RMSE / f"delta_rmse_summary_c{CHAINS}_kt{int(kt)}.csv"
+        path = OUT_DIR_DELTA_BIAS / f"delta_bias_mse_c{CHAINS}_kt{int(kt)}.csv"
         sub.to_csv(path, index=False)
         print(f"wrote {len(sub)} rows -> {path}")
 
@@ -478,32 +345,11 @@ def main():
     rt.to_csv(path, index=False)
     print(f"wrote {len(rt)} rows -> {path}")
 
-    # --- Beta RMSE tables ---
-    OUT_DIR_BETA_RMSE.mkdir(parents=True, exist_ok=True)
-    brmse = beta_rmse_summary_table()
-    path = OUT_DIR_BETA_RMSE / f"beta_rmse_summary_c{CHAINS}_all.csv"
-    brmse.to_csv(path, index=False)
-    print(f"wrote {len(brmse)} rows -> {path}")
-    for kt in sorted(brmse["k_true"].unique()):
-        sub = brmse[brmse["k_true"] == kt].drop(columns="k_true")
-        path = OUT_DIR_BETA_RMSE / f"beta_rmse_summary_c{CHAINS}_kt{int(kt)}.csv"
-        sub.to_csv(path, index=False)
-        print(f"wrote {len(sub)} rows -> {path}")
-
     # --- Component-count tables (recovery summary, confusion, threshold sensitivity) ---
     component_count.write_tables(CHAINS)
 
     # --- Marginal-series convergence tables (R-hat + ESS summaries) ---
     marginal_diag.write_tables(CHAINS)
-
-    # --- Consolidated RMSE (all elements of a block pooled per run), one CSV per
-    # block in that block's own rmse/tables folder ---
-    tbl = consolidated_rmse_table()
-    for block, out_dir in [("beta", OUT_DIR_BETA_RMSE), ("delta", OUT_DIR_DELTA_RMSE)]:
-        sub = tbl[tbl["block"] == block].drop(columns="block")
-        path = out_dir / f"{block}_consolidated_rmse_c{CHAINS}.csv"
-        sub.to_csv(path, index=False)
-        print(f"wrote {len(sub)} rows -> {path}")
 
     # --- Marginal distance summary tables (one set per evaluation grid) ---
     for grid in GRIDS:

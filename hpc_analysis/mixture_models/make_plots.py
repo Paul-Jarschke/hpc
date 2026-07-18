@@ -2,7 +2,7 @@
 Regenerate the full mixture_c2 figure set from data/out/mixture_c2/*.csv.
 
 Run after scripts/gather_summaries.py whenever new runs are gathered. Writes PNGs to
-hpc_analysis/mixture_models/out/{delta,runtime,beta,marginal_comparison,components}/. All figures cover
+hpc_analysis/mixture_models/out/{delta,runtime,marginal_comparison,components}/. All figures cover
 the 2-chain (c2) jobs 100-103 with the four samplers bayesm / bayesm_gibbs / nuts / hmc.
 Marginal-distance figures are produced once per evaluation grid ('full' and 'chebyshev';
 filename suffix _<grid>).
@@ -19,8 +19,7 @@ from plot_recovery import (  # noqa: E402
     save,
     delta_bias_faceted_by_element,
     delta_sd_faceted_by_element,
-    delta_rmse_faceted_by_element,
-    beta_rmse_by_param,
+    delta_mse_faceted_by_element,
     marginal_metric_boxplot,
     marginal_distance_by_ktrue,
     marginal_distances_faceted_by_metric,
@@ -49,9 +48,9 @@ def main():
     for kt in KTRUE:
         save(delta_sd_faceted_by_element(CHAINS, kt), f"delta/sd/plots/delta_sd_elements_kt{kt}.png")
 
-    # Delta absolute error: same layout, y = |post_mean - true_value| per seed.
+    # Delta squared error: same layout, y = (post_mean - true_value)^2 per seed (box mean = MSE).
     for kt in KTRUE:
-        save(delta_rmse_faceted_by_element(CHAINS, kt), f"delta/rmse/plots/delta_rmse_elements_kt{kt}.png")
+        save(delta_mse_faceted_by_element(CHAINS, kt), f"delta/mse/plots/delta_mse_elements_kt{kt}.png")
 
     # Runtime: per sampler by k_true (nuts in hours; bayesm/bayesm_gibbs/hmc in minutes, linear).
     for s in SAMPLERS:
@@ -59,10 +58,6 @@ def main():
 
     # Runtime: all samplers in one figure (log scale).
     save(runtime_samplers_by_ktrue(CHAINS), "runtime/plots/runtime_samplers_by_ktrue.png")
-
-    # Beta RMSE: 1x4 parameter grid, distribution over seeds.
-    for kt in KTRUE:
-        save(beta_rmse_by_param(CHAINS, kt), f"beta/rmse/plots/beta_rmse_kt{kt}.png")
 
     # Marginal comparison: all output under marginal_comparison/, once PER GRID scenario.
     # Per metric a sampler boxplot (x=sampler, k_true x param grid) + the by-k_true view;
@@ -111,14 +106,6 @@ def main():
     # Marginal-series convergence: ESS/R-hat grids (density x mean x variance) + density-only
     # figures, under marginal_comparison/ (density series once per grid).
     marginal_diag.make_plots(CHAINS)
-
-    # Consolidated RMSE: one pooled per-run number per parameter block, saved into
-    # each block's own rmse/plots folder.
-    from plot_recovery import consolidated_rmse_boxplot
-    save(consolidated_rmse_boxplot("beta", CHAINS),
-         f"beta/rmse/plots/beta_consolidated_rmse.png")
-    save(consolidated_rmse_boxplot("delta", CHAINS),
-         f"delta/rmse/plots/delta_consolidated_rmse.png")
 
     print("regenerated all figures -> hpc_analysis/mixture_models/out/")
 

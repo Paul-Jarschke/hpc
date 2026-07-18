@@ -17,7 +17,7 @@ Every marginal table/plot is therefore produced once per grid (filename suffix
   `scripts/gather_summaries.py`, or regenerated from the raw posteriors with
   `hpc_analysis/post_process.py`).
 - **Outputs:** figures and tables under `hpc_analysis/mixture_models/out/`.
-- Entry points: `make_plots.py`, `make_tables.py`, `marginal_winrate.py` (each runnable
+- Entry points: `make_plots.py`, `make_tables.py` (each runnable
   with `.venv/Scripts/python.exe hpc_analysis/<script>.py` from the repo root).
 
 The sibling `analysis/` folder is the UNTOUCHED legacy k5 pipeline (jobs 004-009,

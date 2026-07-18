@@ -12,7 +12,7 @@ throughout, so there is no k_true dimension to facet or loop over - every mixtur
 
 This module exposes ONE general boxplot core, `recovery_boxplot`, that draws a
 boxplot of any chosen value column grouped on an x-axis (default: sampler), with
-optional faceting and row filtering. On top of the Delta/beta plots ported from the
+optional faceting and row filtering. On top of the Delta plots ported from the
 mixture pipeline it adds the two standard-model-specific analyses: mu recovery
 (population mean vs TRUE_MU) and POSTERIOR SIGMA recovery (every lower-triangle
 element vs TRUE_SIGMA, with the empirical covariance of the true unit betas as a
@@ -440,66 +440,59 @@ def delta_sd_faceted_by_element(n_chains: int = 2, df=None, *, jitter: bool = Tr
     return p
 
 
-def delta_rmse_faceted_by_element(n_chains: int = 2, df=None) -> ggplot:
-    """RMSE of each Delta element across the replicate seeds, per sampler, in a 4x2 grid.
+def delta_mse_faceted_by_element(n_chains: int = 2, df=None, *, jitter: bool = True) -> ggplot:
+    """Squared error (post_mean - true_value)^2 of each Delta element, per sampler, 4x2 grid.
 
-    RMSE = sqrt(mean over seeds of (post_mean - true_value)^2). Delta is a population
-    parameter with a SINGLE estimate per run, so - unlike beta (RMSE over the 300 units,
-    which yields a per-run distribution) - the mean square is taken across the replicate
-    datasets: the Monte-Carlo RMSE of the estimator. That is one number per (element,
-    sampler), so this is a bar chart (one bar per sampler per element), not a boxplot.
-    Free y-scale per panel so small-RMSE elements are not compressed by larger ones.
+    Same layout as delta_bias_faceted_by_element. Each jittered point is one replicate
+    seed; the box summarizes the distribution of squared errors across seeds, whose
+    MEAN over seeds is the MSE reported in delta_bias_mse_table. Free y-scale per panel
+    so small-error elements are not compressed by larger ones.
     """
     df = load_recovery("delta") if df is None else df
     df = df.copy()
     df["element"] = df.apply(lambda r: delta_element_label(r["demo"], r["param"]), axis=1)
+    df["sq_error"] = df["bias"] ** 2
     sub = _apply_filters(df, {"n_chains": n_chains}).copy()
     if sub.empty:
         raise ValueError(f"No delta_recovery rows for n_chains={n_chains}.")
 
-    # Collapse each (element, sampler) cell to its Monte-Carlo RMSE over the seeds.
-    rmse = (
-        sub.groupby(["element", "demo", "param", "sampler"], observed=True)["bias"]
-        .apply(lambda e: float(np.sqrt((e ** 2).mean())))
-        .reset_index()
-        .rename(columns={"bias": "rmse"})
-    )
-
-    sampler_order = [s for s in SAMPLER_ORDER if s in set(rmse["sampler"])]
-    rmse["sampler"] = pd.Categorical(rmse["sampler"], categories=sampler_order, ordered=True)
+    sampler_order = [s for s in SAMPLER_ORDER if s in set(sub["sampler"])]
+    sub["sampler"] = pd.Categorical(sub["sampler"], categories=sampler_order, ordered=True)
     element_order = (
-        rmse.sort_values(["demo", "param"])["element"].drop_duplicates().tolist()
+        sub.sort_values(["demo", "param"])["element"].drop_duplicates().tolist()
     )
-    rmse["element"] = pd.Categorical(rmse["element"], categories=element_order, ordered=True)
+    sub["element"] = pd.Categorical(sub["element"], categories=element_order, ordered=True)
 
     counts = sub.groupby("sampler", observed=True)["data_seed"].nunique().to_dict()
-    print(f"[delta_rmse_faceted_by_element] n_chains={n_chains}: seeds/sampler={counts}")
+    print(f"[delta_mse_faceted_by_element] n_chains={n_chains}: seeds/sampler={counts}")
 
-    fill_vals = [SAMPLER_COLORS[s] for s in sampler_order]
+    color_vals = [SAMPLER_COLORS[s] for s in sampler_order]
 
-    p = (
-        ggplot(rmse, aes(x="sampler", y="rmse", fill="sampler"))
-        + geom_col(width=0.6)
-        + facet_wrap("element", ncol=4, scales="free_y", labeller="label_value")
-        + scale_fill_manual(values=fill_vals,
-                            labels=[SAMPLER_LABELS.get(s, s) for s in sampler_order])
-        + scale_x_discrete(labels=[SAMPLER_LABELS.get(s, s) for s in sampler_order])
-        + labs(x="Sampler", y="RMSE (across seeds)", fill="Sampler",
-               title="RMSE of Δ - Standard Model")
-        + theme_bw()
-        + theme(figure_size=(14, 7), axis_text_x=element_text(size=8),
-                plot_title=element_text(size=11))
+    p = ggplot(sub, aes(x="sampler", y="sq_error", color="sampler"))
+    if jitter:
+        p = p + geom_jitter(width=0.2, height=0, size=0.8, alpha=0.45)
+    p = (p
+         + geom_boxplot(fill="#FFFFFF00", outlier_alpha=0)
+         + facet_wrap("element", ncol=4, scales="free_y", labeller="label_value")
+         + scale_color_manual(values=color_vals,
+                              labels=[SAMPLER_LABELS.get(s, s) for s in sampler_order])
+         + scale_x_discrete(labels=[SAMPLER_LABELS.get(s, s) for s in sampler_order])
+         + labs(x="Sampler", y="Mean Squared Error (MSE)", color="Sampler",
+                title="Squared error of Δ - Standard Model")
+         + theme_bw()
+         + theme(figure_size=(14, 7), axis_text_x=element_text(size=8),
+                 plot_title=element_text(size=11))
     )
     return p
 
 
 # ----------------------------------------------------------------------------- #
-# Shared per-parameter boxplot core (beta AND mu use the same 1x4 layout).
+# Shared per-parameter boxplot core (mu uses the 1x4 layout).
 # ----------------------------------------------------------------------------- #
 def _param_boxplot(df: pd.DataFrame, y_col: str, y_label: str,
                    title: str, sampler_order: list, *, jitter: bool,
                    hline: Optional[float] = None) -> ggplot:
-    """Shared core for per-param boxplots (beta bias / rmse / mae and mu bias).
+    """Shared core for per-param boxplots (mu bias).
 
     `hline` draws a dashed reference line at that y value (e.g. 0.0 for a bias plot),
     added behind the jitter/box so both stay visible.
@@ -529,94 +522,6 @@ def _param_boxplot(df: pd.DataFrame, y_col: str, y_label: str,
 
 
 # ----------------------------------------------------------------------------- #
-# Beta recovery (unit-level coefficients; schema identical to the mixture pipeline).
-# ----------------------------------------------------------------------------- #
-def compute_beta_post_std(df_summary=None) -> pd.DataFrame:
-    """Mean posterior SD of the unit-level coefficients beta_i, per run and parameter.
-
-    The aggregated beta_recovery table drops the posterior SD (it keeps only bias / rmse /
-    coverage), so this reads beta_summary.csv (large,
-    one row per unit x param) and averages the per-unit `post_std` over the N decision
-    units. Returns one row per
-    (dataset_key, scenario, k_true, data_seed, k_model, sampler, n_chains, param)
-    with a `mean_post_std` column: how tightly, on average, the sampler pins down an
-    individual's coefficient for that parameter.
-    """
-    if df_summary is None:
-        df_summary = load_recovery("beta_summary")
-    group_cols = [
-        "dataset_key", "scenario", "k_true", "data_seed",
-        "k_model", "sampler", "n_chains", "param",
-    ]
-    out = (
-        df_summary.groupby(group_cols, observed=True)["post_std"]
-        .mean()
-        .reset_index()
-        .rename(columns={"post_std": "mean_post_std"})
-    )
-    return out
-
-
-def beta_bias_by_param(n_chains: int = 2, df=None, *, jitter: bool = True) -> ggplot:
-    """Bias (mean post_mean - true_value over all units) per beta parameter.
-
-    One boxplot per (sampler, param), distribution over replicate seeds.
-    Faceted by parameter (Alt1/Alt2/Alt3/Price) in a single row of 4 panels.
-    """
-    df = load_recovery("beta") if df is None else df
-    sub = _apply_filters(df, {"n_chains": n_chains}).copy()
-    if sub.empty:
-        raise ValueError(f"No beta_recovery rows for n_chains={n_chains}.")
-    sampler_order = [s for s in SAMPLER_ORDER if s in set(sub["sampler"])]
-    sub["sampler"] = pd.Categorical(sub["sampler"], categories=sampler_order, ordered=True)
-    counts = sub.groupby("sampler", observed=True)["data_seed"].nunique().to_dict()
-    print(f"[beta_bias_by_param] n_chains={n_chains}: seeds/sampler={counts}")
-    return _param_boxplot(sub, "bias", "Bias (β̂−β)",
-                          "Bias of β - Standard Model", sampler_order,
-                          jitter=jitter, hline=0.0)
-
-
-def beta_rmse_by_param(n_chains: int = 2, df=None, *, jitter: bool = True) -> ggplot:
-    """RMSE of beta_i posteriors per parameter (aggregated over the decision units).
-
-    RMSE = sqrt(mean((post_mean_i - true_i)^2)) across units, one value per run.
-    Distribution over replicate seeds shown as a boxplot per sampler per parameter.
-    """
-    df = load_recovery("beta") if df is None else df
-    sub = _apply_filters(df, {"n_chains": n_chains}).copy()
-    if sub.empty:
-        raise ValueError(f"No beta_recovery rows for n_chains={n_chains}.")
-    sampler_order = [s for s in SAMPLER_ORDER if s in set(sub["sampler"])]
-    sub["sampler"] = pd.Categorical(sub["sampler"], categories=sampler_order, ordered=True)
-    counts = sub.groupby("sampler", observed=True)["data_seed"].nunique().to_dict()
-    print(f"[beta_rmse_by_param] n_chains={n_chains}: seeds/sampler={counts}")
-    return _param_boxplot(sub, "rmse", "RMSE",
-                          "RMSE of β by Parameter - Standard Model", sampler_order, jitter=jitter)
-
-
-def beta_sd_by_param(n_chains: int = 2, sd_df=None, *, jitter: bool = True) -> ggplot:
-    """Mean posterior SD of beta_i (averaged over the decision units) per parameter.
-
-    Each point is one seed: the mean over units of post_std for that parameter. The box
-    summarizes the distribution across replicate seeds - the beta counterpart of
-    delta_sd_faceted_by_element, showing how tightly each sampler pins down individual
-    coefficients. Faceted by parameter (Alt1/Alt2/Alt3/Price) in a single row of 4 panels.
-    """
-    if sd_df is None:
-        print("[beta_sd_by_param] loading beta_summary to compute posterior SDs ...")
-        sd_df = compute_beta_post_std()
-    sub = _apply_filters(sd_df, {"n_chains": n_chains}).copy()
-    if sub.empty:
-        raise ValueError(f"No beta posterior-SD rows for n_chains={n_chains}.")
-    sampler_order = [s for s in SAMPLER_ORDER if s in set(sub["sampler"])]
-    sub["sampler"] = pd.Categorical(sub["sampler"], categories=sampler_order, ordered=True)
-    counts = sub.groupby("sampler", observed=True)["data_seed"].nunique().to_dict()
-    print(f"[beta_sd_by_param] n_chains={n_chains}: seeds/sampler={counts}")
-    return _param_boxplot(sub, "mean_post_std", "Mean SD(β̂) (over units)",
-                          "SD of β - Standard Model", sampler_order, jitter=jitter)
-
-
-# ----------------------------------------------------------------------------- #
 # Mu recovery (NEW for the standard model: the population mean vs TRUE_MU is a
 # plain 4-vector at K = 1, so per-parameter bias is directly meaningful).
 # ----------------------------------------------------------------------------- #
@@ -624,7 +529,7 @@ def mu_bias_by_param(n_chains: int = 2, df=None, *, jitter: bool = True) -> ggpl
     """Bias of the population mean mu (post_mean - true_value) per parameter.
 
     One boxplot per (sampler, param), distribution over replicate seeds - the same
-    1x4 layout as the beta plots. This is the numeric form of the standard analysis
+    1x4 layout as the Delta plots. This is the numeric form of the standard analysis
     notebook's summarize_mu comparison.
     """
     df = load_recovery("mu") if df is None else df
@@ -639,6 +544,26 @@ def mu_bias_by_param(n_chains: int = 2, df=None, *, jitter: bool = True) -> ggpl
                           "Bias of μ - Standard Model", sampler_order, jitter=jitter)
 
 
+def mu_mse_by_param(n_chains: int = 2, df=None, *, jitter: bool = True) -> ggplot:
+    """Squared error (post_mean - true_value)^2 of the population mean mu per parameter.
+
+    One boxplot per (sampler, param), distribution over replicate seeds; the box MEAN
+    over seeds is the MSE reported in mu_recovery_summary_table. Same 1x4 layout as
+    mu_bias_by_param.
+    """
+    df = load_recovery("mu") if df is None else df
+    sub = _apply_filters(df, {"n_chains": n_chains}).copy()
+    if sub.empty:
+        raise ValueError(f"No mu_recovery rows for n_chains={n_chains}.")
+    sub["sq_error"] = sub["bias"] ** 2
+    sampler_order = [s for s in SAMPLER_ORDER if s in set(sub["sampler"])]
+    sub["sampler"] = pd.Categorical(sub["sampler"], categories=sampler_order, ordered=True)
+    counts = sub.groupby("sampler", observed=True)["data_seed"].nunique().to_dict()
+    print(f"[mu_mse_by_param] n_chains={n_chains}: seeds/sampler={counts}")
+    return _param_boxplot(sub, "sq_error", "Mean Squared Error (MSE)",
+                          "Squared error of μ - Standard Model", sampler_order, jitter=jitter)
+
+
 # ----------------------------------------------------------------------------- #
 # Sigma recovery (NEW for the standard model: the POSTERIOR SIGMA analysis - every
 # lower-triangle element of the heterogeneity covariance vs TRUE_SIGMA; the
@@ -648,23 +573,21 @@ def mu_bias_by_param(n_chains: int = 2, df=None, *, jitter: bool = True) -> ggpl
 def sigma_bias_faceted_by_element(n_chains: int = 2, df=None, *, jitter: bool = True) -> ggplot:
     """Signed error of each posterior Sigma element (post_mean - true_value), per sampler.
 
-    One panel per lower-triangle element (incl. the diagonal; 10 panels for P = 4)
-    in a 4-column grid with free y-scale per panel - the same transparent-box +
-    jitter layout as the Delta element plots.
+    Panels are arranged as the LOWER TRIANGLE of the P x P covariance matrix via a
+    facet_grid on (matrix row, matrix col): row i runs down, col j across, so panel
+    (i, j) sits where Sigma_{i,j} lives and the upper triangle is left blank. Free
+    y-scale per matrix row; transparent-box + jitter layout as the Delta element plots.
     """
     df = load_recovery("sigma") if df is None else df
     df = df.copy()
-    df["element"] = df.apply(lambda r: sigma_element_label(r["row"], r["col"]), axis=1)
     sub = _apply_filters(df, {"n_chains": n_chains}).copy()
     if sub.empty:
         raise ValueError(f"No sigma_recovery rows for n_chains={n_chains}.")
 
     sampler_order = [s for s in SAMPLER_ORDER if s in set(sub["sampler"])]
     sub["sampler"] = pd.Categorical(sub["sampler"], categories=sampler_order, ordered=True)
-    element_order = (
-        sub.sort_values(["row", "col"])["element"].drop_duplicates().tolist()
-    )
-    sub["element"] = pd.Categorical(sub["element"], categories=element_order, ordered=True)
+    sub["row"] = pd.Categorical(sub["row"], categories=_PARAM_ORDER, ordered=True)
+    sub["col"] = pd.Categorical(sub["col"], categories=_PARAM_ORDER, ordered=True)
 
     counts = sub.groupby("sampler", observed=True)["data_seed"].nunique().to_dict()
     print(f"[sigma_bias_faceted_by_element] n_chains={n_chains}: seeds/sampler={counts}")
@@ -677,13 +600,55 @@ def sigma_bias_faceted_by_element(n_chains: int = 2, df=None, *, jitter: bool = 
         p = p + geom_jitter(width=0.2, height=0, size=0.8, alpha=0.45)
     p = (p
          + geom_boxplot(fill="#FFFFFF00", outlier_alpha=0)
-         + facet_wrap("element", ncol=4, scales="free_y", labeller="label_value")
+         + facet_grid(rows="row", cols="col", scales="free_y", labeller="label_value")
          + scale_color_manual(values=color_vals, labels=[SAMPLER_LABELS.get(s, s) for s in sampler_order])
          + scale_x_discrete(labels=[SAMPLER_LABELS.get(s, s) for s in sampler_order])
          + labs(x="Sampler", y="Error (Σ̂−Σ)", color="Sampler",
-                title="Error of Σ Elements - Standard Model")
+                title="Error of Σ Elements (lower triangle) - Standard Model")
          + theme_bw()
-         + theme(figure_size=(14, 8.5), axis_text_x=element_text(size=8),
+         + theme(figure_size=(12, 10), axis_text_x=element_text(size=8),
+                 plot_title=element_text(size=11))
+    )
+    return p
+
+
+def sigma_mse_faceted_by_element(n_chains: int = 2, df=None, *, jitter: bool = True) -> ggplot:
+    """Squared error (post_mean - true_value)^2 of each posterior Sigma element, per sampler.
+
+    Panels are arranged as the LOWER TRIANGLE of the P x P covariance matrix (facet_grid
+    on matrix row x col), so panel (i, j) sits where Sigma_{i,j} lives and the upper
+    triangle is blank. The box MEAN over seeds is the MSE reported in
+    sigma_recovery_summary_table. Same layout as sigma_bias_faceted_by_element.
+    """
+    df = load_recovery("sigma") if df is None else df
+    df = df.copy()
+    df["sq_error"] = df["bias"] ** 2
+    sub = _apply_filters(df, {"n_chains": n_chains}).copy()
+    if sub.empty:
+        raise ValueError(f"No sigma_recovery rows for n_chains={n_chains}.")
+
+    sampler_order = [s for s in SAMPLER_ORDER if s in set(sub["sampler"])]
+    sub["sampler"] = pd.Categorical(sub["sampler"], categories=sampler_order, ordered=True)
+    sub["row"] = pd.Categorical(sub["row"], categories=_PARAM_ORDER, ordered=True)
+    sub["col"] = pd.Categorical(sub["col"], categories=_PARAM_ORDER, ordered=True)
+
+    counts = sub.groupby("sampler", observed=True)["data_seed"].nunique().to_dict()
+    print(f"[sigma_mse_faceted_by_element] n_chains={n_chains}: seeds/sampler={counts}")
+
+    color_vals = [SAMPLER_COLORS[s] for s in sampler_order]
+
+    p = ggplot(sub, aes(x="sampler", y="sq_error", color="sampler"))
+    if jitter:
+        p = p + geom_jitter(width=0.2, height=0, size=0.8, alpha=0.45)
+    p = (p
+         + geom_boxplot(fill="#FFFFFF00", outlier_alpha=0)
+         + facet_grid(rows="row", cols="col", scales="free_y", labeller="label_value")
+         + scale_color_manual(values=color_vals, labels=[SAMPLER_LABELS.get(s, s) for s in sampler_order])
+         + scale_x_discrete(labels=[SAMPLER_LABELS.get(s, s) for s in sampler_order])
+         + labs(x="Sampler", y="Mean Squared Error (MSE)", color="Sampler",
+                title="Squared error of Σ Elements (lower triangle) - Standard Model")
+         + theme_bw()
+         + theme(figure_size=(12, 10), axis_text_x=element_text(size=8),
                  plot_title=element_text(size=11))
     )
     return p
@@ -927,53 +892,6 @@ def main() -> None:
     print("== Runtime by sampler ==")
     p_rt = runtime_by_sampler()
     print("wrote", save(p_rt, "runtime/plots/runtime_by_sampler.png"))
-
-
-# ----------------------------------------------------------------------------- #
-# Consolidated RMSE: ONE per-run number per parameter block (beta / Delta), pooling
-# every element of the block. Definitions per run (= one dataset x sampler fit):
-#   beta : sqrt(mean over params of rmse_p^2). rmse_p in beta_recovery.csv is the
-#          unit-level RMSE over the N units, and every param covers the same N,
-#          so this equals the RMSE pooled over all N*P unit-level errors.
-#   delta: sqrt(mean over the D*P elements of (post_mean - true)^2), from the
-#          per-element signed `bias` column of delta_recovery.csv.
-# ----------------------------------------------------------------------------- #
-def consolidated_rmse_by_run(n_chains: int = 2) -> pd.DataFrame:
-    """Per-run consolidated RMSE for both blocks. Long frame:
-    [block ('beta'|'delta'), sampler, dataset_key, rmse]."""
-    beta = load_recovery("beta")
-    beta = beta[beta["n_chains"] == n_chains]
-    b = (beta.assign(sq=beta["rmse"] ** 2)
-         .groupby(["sampler", "dataset_key"], as_index=False)["sq"].mean())
-    b["rmse"] = np.sqrt(b.pop("sq"))
-    b["block"] = "beta"
-
-    delta = load_recovery("delta")
-    delta = delta[delta["n_chains"] == n_chains]
-    d = (delta.assign(sq=delta["bias"] ** 2)
-         .groupby(["sampler", "dataset_key"], as_index=False)["sq"].mean())
-    d["rmse"] = np.sqrt(d.pop("sq"))
-    d["block"] = "delta"
-
-    return pd.concat([b, d], ignore_index=True)
-
-
-def consolidated_rmse_boxplot(block: str, n_chains: int = 2, logy: bool = None) -> ggplot:
-    """Distribution of the per-run consolidated RMSE of ONE parameter block
-    ('beta' or 'delta'): sampler on the x-axis, one box per sampler pooling all
-    replicate seeds - the same layout as the element-wise recovery plots, so boxes
-    and their jitter points line up. beta defaults to a log y-scale."""
-    df = consolidated_rmse_by_run(n_chains)
-    df = df[df["block"] == block].copy()
-    label = {"beta": "β", "delta": "Δ"}[block]
-    if logy is None:
-        logy = block == "beta"
-    return recovery_boxplot(
-        df, value="rmse", x="sampler", jitter=True, logy=logy,
-        title=f"Consolidated {label} RMSE (all elements pooled per run) - {n_chains} chain(s)",
-        xlab="", ylab="RMSE (per-run, pooled)" + (" [log]" if logy else ""),
-        figure_size=(7.5, 5.0),
-    )
 
 
 if __name__ == "__main__":
