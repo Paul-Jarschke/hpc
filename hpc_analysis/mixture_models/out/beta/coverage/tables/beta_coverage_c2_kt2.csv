@@ -1,5 +1,0 @@
-param,coverage_pct_bayesm,coverage_pct_Replication,coverage_pct_NUTS,coverage_pct_HMC,n_sim_bayesm,n_sim_Replication,n_sim_NUTS,n_sim_HMC
-Alt1,95.3,95.2,95.6,95.9,100.0,100.0,100.0,100.0
-Alt2,95.1,95.0,95.8,95.7,100.0,100.0,100.0,100.0
-Alt3,95.2,95.2,95.4,95.5,100.0,100.0,100.0,100.0
-Price,95.3,95.2,95.4,95.4,100.0,100.0,100.0,100.0

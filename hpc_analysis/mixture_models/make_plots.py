@@ -17,17 +17,10 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from plot_recovery import (  # noqa: E402
     save,
-    compute_beta_correlation,
     delta_bias_faceted_by_element,
     delta_sd_faceted_by_element,
     delta_rmse_faceted_by_element,
-    delta_coverage_faceted_by_element,
-    delta_coverage_by_ktrue,
     beta_rmse_by_param,
-    beta_correlation_by_param,
-    beta_correlation_by_ktrue,
-    beta_coverage_by_param,
-    beta_coverage_by_ktrue,
     marginal_metric_boxplot,
     marginal_distance_by_ktrue,
     marginal_distances_faceted_by_metric,
@@ -60,13 +53,6 @@ def main():
     for kt in KTRUE:
         save(delta_rmse_faceted_by_element(CHAINS, kt), f"delta/rmse/plots/delta_rmse_elements_kt{kt}.png")
 
-    # Delta coverage: bar chart, one bar per sampler per element, 95% reference line.
-    for kt in KTRUE:
-        save(delta_coverage_faceted_by_element(CHAINS, kt), f"delta/coverage/plots/delta_coverage_kt{kt}.png")
-
-    # Delta coverage by k_true: dodged bars (sampler) on x=k_true, all k_true in one figure.
-    save(delta_coverage_by_ktrue(CHAINS), f"delta/coverage/plots/delta_coverage_by_ktrue.png")
-
     # Runtime: per sampler by k_true (nuts in hours; bayesm/bayesm_gibbs/hmc in minutes, linear).
     for s in SAMPLERS:
         save(runtime_by_ktrue(s, CHAINS), f"runtime/plots/runtime_{s}_by_ktrue.png")
@@ -77,20 +63,6 @@ def main():
     # Beta RMSE: 1x4 parameter grid, distribution over seeds.
     for kt in KTRUE:
         save(beta_rmse_by_param(CHAINS, kt), f"beta/rmse/plots/beta_rmse_kt{kt}.png")
-
-    # Beta correlation: load beta_summary once (large) then reuse across all k_true.
-    print("computing beta correlations from beta_summary.csv ...")
-    corr_df = compute_beta_correlation()
-    for kt in KTRUE:
-        save(beta_correlation_by_param(CHAINS, kt, corr_df=corr_df),
-             f"beta/correlation/plots/beta_correlation_kt{kt}.png")
-    save(beta_correlation_by_ktrue(CHAINS, corr_df=corr_df),
-         f"beta/correlation/plots/beta_correlation_by_ktrue.png")
-
-    # Beta coverage: bar chart per k_true + one combined by-k_true figure.
-    for kt in KTRUE:
-        save(beta_coverage_by_param(CHAINS, kt), f"beta/coverage/plots/beta_coverage_kt{kt}.png")
-    save(beta_coverage_by_ktrue(CHAINS), f"beta/coverage/plots/beta_coverage_by_ktrue.png")
 
     # Marginal comparison: all output under marginal_comparison/, once PER GRID scenario.
     # Per metric a sampler boxplot (x=sampler, k_true x param grid) + the by-k_true view;

@@ -19,7 +19,7 @@ import pandas as pd
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from plot_recovery import (  # noqa: E402
-    load_recovery, DIR_FIG, delta_element_label, compute_beta_correlation, MARGINAL_METRICS,
+    load_recovery, DIR_FIG, delta_element_label, MARGINAL_METRICS,
 )
 import component_count  # noqa: E402
 import marginal_diag  # noqa: E402
@@ -27,11 +27,8 @@ import marginal_diag  # noqa: E402
 OUT_DIR_DELTA_BIAS     = DIR_FIG / "delta" / "bias"     / "tables"
 OUT_DIR_DELTA_SD       = DIR_FIG / "delta" / "sd"       / "tables"
 OUT_DIR_DELTA_RMSE     = DIR_FIG / "delta" / "rmse"     / "tables"
-OUT_DIR_DELTA_COVERAGE = DIR_FIG / "delta" / "coverage" / "tables"
 OUT_DIR_RUNTIME        = DIR_FIG / "runtime" / "tables"
 OUT_DIR_BETA_RMSE        = DIR_FIG / "beta" / "rmse"        / "tables"
-OUT_DIR_BETA_CORRELATION = DIR_FIG / "beta" / "correlation" / "tables"
-OUT_DIR_BETA_COVERAGE    = DIR_FIG / "beta" / "coverage"    / "tables"
 OUT_DIR_MARGINAL         = DIR_FIG / "marginal_comparison"   # per-grid subfolder added below
 
 _PARAM_ORDER = ["Alt1", "Alt2", "Alt3", "Price"]
@@ -121,40 +118,6 @@ def delta_sd_summary_table(n_chains: int = CHAINS) -> pd.DataFrame:
     stat_cols = ["min", "q1", "mean", "median", "q3", "max"]
     agg[stat_cols] = agg[stat_cols].round(4)
     return agg[["k_true", "element", "sampler", *stat_cols, "n_sim"]].reset_index(drop=True)
-
-
-def delta_coverage_table(n_chains: int = CHAINS) -> pd.DataFrame:
-    """Empirical 95% CI coverage rate for every Delta element, by sampler and k_true.
-
-    Coverage (%) = count(in_ci == True) / n_sim * 100.
-    A well-calibrated sampler should be near 95% for every element.
-
-    Returns a wide DataFrame:
-        rows    = (k_true, element)
-        columns = coverage_pct_{sampler} and n_sim_{sampler}
-    """
-    df = load_recovery("delta")
-    df = df[df["n_chains"] == n_chains].copy()
-    df["element"] = df.apply(lambda r: delta_element_label(r["demo"], r["param"]), axis=1)
-    df["in_ci"] = df["in_ci"].astype(bool)
-
-    agg = (
-        df.groupby(["k_true", "element", "sampler"], observed=True)["in_ci"]
-        .agg(coverage_pct=lambda x: round(x.mean() * 100, 1), n_sim="count")
-        .reset_index()
-    )
-
-    samplers = [s for s in SAMPLER_ORDER if s in agg["sampler"].unique()]
-    wide = agg.pivot_table(
-        index=["k_true", "element"],
-        columns="sampler",
-        values=["coverage_pct", "n_sim"],
-    )
-    wide = wide.reindex(
-        columns=pd.MultiIndex.from_product([["coverage_pct", "n_sim"], samplers])
-    )
-    wide.columns = [f"{metric}_{SAMPLER_LABELS.get(s, s)}" for metric, s in wide.columns]
-    return wide.reset_index()
 
 
 def delta_rmse_summary_table(n_chains: int = CHAINS) -> pd.DataFrame:
@@ -283,82 +246,6 @@ def beta_rmse_summary_table(n_chains: int = CHAINS) -> pd.DataFrame:
     stat_cols = ["min", "q1", "mean", "median", "q3", "max"]
     agg[stat_cols] = agg[stat_cols].round(4)
     return agg[["k_true", "param", "sampler", *stat_cols, "n_sim"]].reset_index(drop=True)
-
-
-def beta_correlation_summary_table(n_chains: int = CHAINS,
-                                   corr_df=None) -> pd.DataFrame:
-    """Distribution of per-run Pearson correlation for each beta parameter.
-
-    Correlation = corr_i(post_mean_i, true_value_i) across 330 units, one value per run.
-    This table summarises those values across replicate seeds.
-
-    Returns a tidy long DataFrame:
-        rows    = (k_true, param, sampler)
-        columns = min, q1, mean, median, q3, max, n_sim
-    """
-    if corr_df is None:
-        print("loading beta_summary.csv to compute correlations ...")
-        corr_df = compute_beta_correlation()
-    df = corr_df[corr_df["n_chains"] == n_chains].copy()
-
-    def _agg(g):
-        r = g["correlation"]
-        return pd.Series({
-            "min":    r.min(),
-            "q1":     r.quantile(0.25),
-            "mean":   r.mean(),
-            "median": r.median(),
-            "q3":     r.quantile(0.75),
-            "max":    r.max(),
-            "n_sim":  len(r),
-        })
-
-    agg = (
-        df.groupby(["k_true", "param", "sampler"], observed=True)
-        .apply(_agg, include_groups=False)
-        .reset_index()
-    )
-    samplers_present = [s for s in SAMPLER_ORDER if s in agg["sampler"].unique()]
-    params_present = [p for p in _PARAM_ORDER if p in agg["param"].unique()]
-    agg["sampler"] = pd.Categorical(agg["sampler"], categories=samplers_present, ordered=True)
-    agg["param"] = pd.Categorical(agg["param"], categories=params_present, ordered=True)
-    agg["sampler"] = agg["sampler"].map(SAMPLER_LABELS)
-    agg = agg.sort_values(["k_true", "param", "sampler"])
-    stat_cols = ["min", "q1", "mean", "median", "q3", "max"]
-    agg[stat_cols] = agg[stat_cols].round(4)
-    return agg[["k_true", "param", "sampler", *stat_cols, "n_sim"]].reset_index(drop=True)
-
-
-def beta_coverage_table(n_chains: int = CHAINS) -> pd.DataFrame:
-    """Mean 95% CI coverage of individual betas, by parameter, sampler and k_true.
-
-    coverage95 in beta_recovery is the fraction of 330 units whose true beta_i
-    falls in the posterior 95% CI for that run. This table averages that fraction
-    across replicate seeds and expresses it as a percentage.
-
-    Returns a wide DataFrame:
-        rows    = (k_true, param)
-        columns = coverage_pct_{sampler} and n_sim_{sampler}
-    """
-    df = load_recovery("beta")
-    df = df[df["n_chains"] == n_chains].copy()
-
-    agg = (
-        df.groupby(["k_true", "param", "sampler"], observed=True)["coverage95"]
-        .agg(coverage_pct=lambda x: round(x.mean() * 100, 1), n_sim="count")
-        .reset_index()
-    )
-    samplers = [s for s in SAMPLER_ORDER if s in agg["sampler"].unique()]
-    wide = agg.pivot_table(
-        index=["k_true", "param"],
-        columns="sampler",
-        values=["coverage_pct", "n_sim"],
-    )
-    wide = wide.reindex(
-        columns=pd.MultiIndex.from_product([["coverage_pct", "n_sim"], samplers])
-    )
-    wide.columns = [f"{metric}_{SAMPLER_LABELS.get(s, s)}" for metric, s in wide.columns]
-    return wide.reset_index()
 
 
 def marginal_distance_summary_table(n_chains: int = CHAINS,
@@ -544,7 +431,6 @@ def main():
     OUT_DIR_DELTA_BIAS.mkdir(parents=True, exist_ok=True)
     OUT_DIR_DELTA_SD.mkdir(parents=True, exist_ok=True)
     OUT_DIR_DELTA_RMSE.mkdir(parents=True, exist_ok=True)
-    OUT_DIR_DELTA_COVERAGE.mkdir(parents=True, exist_ok=True)
     OUT_DIR_RUNTIME.mkdir(parents=True, exist_ok=True)
 
     # --- Delta bias / MCSE tables ---
@@ -557,19 +443,6 @@ def main():
     for kt in sorted(tbl["k_true"].unique()):
         sub = tbl[tbl["k_true"] == kt].drop(columns="k_true")
         path = OUT_DIR_DELTA_BIAS / f"delta_bias_mcse_c{CHAINS}_kt{int(kt)}.csv"
-        sub.to_csv(path, index=False)
-        print(f"wrote {len(sub)} rows -> {path}")
-
-    # --- Delta coverage tables ---
-    cov = delta_coverage_table()
-
-    path = OUT_DIR_DELTA_COVERAGE / f"delta_coverage_c{CHAINS}_all.csv"
-    cov.to_csv(path, index=False)
-    print(f"wrote {len(cov)} rows -> {path}")
-
-    for kt in sorted(cov["k_true"].unique()):
-        sub = cov[cov["k_true"] == kt].drop(columns="k_true")
-        path = OUT_DIR_DELTA_COVERAGE / f"delta_coverage_c{CHAINS}_kt{int(kt)}.csv"
         sub.to_csv(path, index=False)
         print(f"wrote {len(sub)} rows -> {path}")
 
@@ -614,32 +487,6 @@ def main():
     for kt in sorted(brmse["k_true"].unique()):
         sub = brmse[brmse["k_true"] == kt].drop(columns="k_true")
         path = OUT_DIR_BETA_RMSE / f"beta_rmse_summary_c{CHAINS}_kt{int(kt)}.csv"
-        sub.to_csv(path, index=False)
-        print(f"wrote {len(sub)} rows -> {path}")
-
-    # --- Beta correlation tables (load beta_summary once) ---
-    OUT_DIR_BETA_CORRELATION.mkdir(parents=True, exist_ok=True)
-    print("loading beta_summary.csv to compute correlations ...")
-    corr_df = compute_beta_correlation()
-    bcorr = beta_correlation_summary_table(corr_df=corr_df)
-    path = OUT_DIR_BETA_CORRELATION / f"beta_correlation_summary_c{CHAINS}_all.csv"
-    bcorr.to_csv(path, index=False)
-    print(f"wrote {len(bcorr)} rows -> {path}")
-    for kt in sorted(bcorr["k_true"].unique()):
-        sub = bcorr[bcorr["k_true"] == kt].drop(columns="k_true")
-        path = OUT_DIR_BETA_CORRELATION / f"beta_correlation_summary_c{CHAINS}_kt{int(kt)}.csv"
-        sub.to_csv(path, index=False)
-        print(f"wrote {len(sub)} rows -> {path}")
-
-    # --- Beta coverage tables ---
-    OUT_DIR_BETA_COVERAGE.mkdir(parents=True, exist_ok=True)
-    bcov = beta_coverage_table()
-    path = OUT_DIR_BETA_COVERAGE / f"beta_coverage_c{CHAINS}_all.csv"
-    bcov.to_csv(path, index=False)
-    print(f"wrote {len(bcov)} rows -> {path}")
-    for kt in sorted(bcov["k_true"].unique()):
-        sub = bcov[bcov["k_true"] == kt].drop(columns="k_true")
-        path = OUT_DIR_BETA_COVERAGE / f"beta_coverage_c{CHAINS}_kt{int(kt)}.csv"
         sub.to_csv(path, index=False)
         print(f"wrote {len(sub)} rows -> {path}")
 

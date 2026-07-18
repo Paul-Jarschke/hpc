@@ -22,20 +22,15 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from plot_recovery import (  # noqa: E402
     save,
     load_recovery,
-    compute_beta_correlation,
     compute_beta_post_std,
     delta_bias_faceted_by_element,
     delta_sd_faceted_by_element,
     delta_rmse_faceted_by_element,
-    delta_coverage_faceted_by_element,
     mu_bias_by_param,
-    mu_coverage_by_param,
     sigma_bias_faceted_by_element,
     beta_bias_by_param,
     beta_sd_by_param,
     beta_rmse_by_param,
-    beta_correlation_by_param,
-    beta_coverage_by_param,
     marginal_metric_boxplot,
     marginal_distances_faceted_by_metric,
     retained_mass_boxplot,
@@ -63,12 +58,8 @@ def main():
     # Delta absolute error: same layout, y = |post_mean - true_value| per seed.
     save(delta_rmse_faceted_by_element(CHAINS), f"delta/rmse/plots/delta_rmse_elements.png")
 
-    # Delta coverage: bar chart, one bar per sampler per element, 95% reference line.
-    save(delta_coverage_faceted_by_element(CHAINS), f"delta/coverage/plots/delta_coverage.png")
-
-    # Mu recovery (standard-model specific): bias boxplot + coverage bars per parameter.
+    # Mu recovery (standard-model specific): bias boxplot per parameter.
     save(mu_bias_by_param(CHAINS), f"mu/plots/mu_bias.png")
-    save(mu_coverage_by_param(CHAINS), f"mu/plots/mu_coverage.png")
 
     # Posterior Sigma recovery (standard-model specific): signed element errors,
     # one panel per lower-triangle element.
@@ -83,22 +74,13 @@ def main():
     # Beta RMSE: 1x4 parameter grid, distribution over seeds.
     save(beta_rmse_by_param(CHAINS), f"beta/rmse/plots/beta_rmse.png")
 
-    # Beta posterior SD and correlation both derive from beta_summary.csv (large),
-    # so load it once and feed both.
-    print("loading beta_summary.csv for posterior SD + correlation plots ...")
+    # Beta posterior SD derives from beta_summary.csv (large), so load it once.
+    print("loading beta_summary.csv for posterior SD plots ...")
     df_summary = load_recovery("beta_summary")
 
     # Beta posterior SD: mean over units of post_std, 1x4 parameter grid over seeds.
     sd_df = compute_beta_post_std(df_summary)
     save(beta_sd_by_param(CHAINS, sd_df=sd_df), f"beta/sd/plots/beta_sd.png")
-
-    # Beta correlation.
-    corr_df = compute_beta_correlation(df_summary)
-    save(beta_correlation_by_param(CHAINS, corr_df=corr_df),
-         f"beta/correlation/plots/beta_correlation.png")
-
-    # Beta coverage: bar chart per parameter.
-    save(beta_coverage_by_param(CHAINS), f"beta/coverage/plots/beta_coverage.png")
 
     # Marginal comparison: all output under marginal_comparison/, once PER GRID scenario.
     # Per metric a sampler boxplot (x=sampler, 1x4 param facets) plus the all-metric grid.

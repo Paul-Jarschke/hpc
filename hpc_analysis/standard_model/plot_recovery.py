@@ -493,58 +493,6 @@ def delta_rmse_faceted_by_element(n_chains: int = 2, df=None) -> ggplot:
     return p
 
 
-def delta_coverage_faceted_by_element(n_chains: int = 2, df=None) -> ggplot:
-    """Empirical 95% CI coverage rate for each Delta element, per sampler.
-
-    Coverage = (number of seeds where true_value falls in the 95% credible interval)
-               / n_sim * 100.  One bar per sampler per element; dashed reference at 95%.
-    A well-calibrated sampler should land near 95% for every element.
-    """
-    df = load_recovery("delta") if df is None else df
-    df = df.copy()
-    df["element"] = df.apply(lambda r: delta_element_label(r["demo"], r["param"]), axis=1)
-    df["in_ci"] = df["in_ci"].astype(bool)
-    sub = _apply_filters(df, {"n_chains": n_chains}).copy()
-    if sub.empty:
-        raise ValueError(f"No delta_recovery rows for n_chains={n_chains}.")
-
-    # Aggregate to one coverage value per (element, sampler).
-    cov = (
-        sub.groupby(["element", "demo", "param", "sampler"], observed=True)["in_ci"]
-        .mean()
-        .mul(100)
-        .reset_index()
-        .rename(columns={"in_ci": "coverage_pct"})
-    )
-
-    sampler_order = [s for s in SAMPLER_ORDER if s in set(cov["sampler"])]
-    cov["sampler"] = pd.Categorical(cov["sampler"], categories=sampler_order, ordered=True)
-    element_order = (
-        cov.sort_values(["demo", "param"])["element"].drop_duplicates().tolist()
-    )
-    cov["element"] = pd.Categorical(cov["element"], categories=element_order, ordered=True)
-
-    fill_vals = [SAMPLER_COLORS[s] for s in sampler_order]
-
-    p = (
-        ggplot(cov, aes(x="sampler", y="coverage_pct", fill="sampler"))
-        + geom_col(width=0.6)
-        + geom_hline(yintercept=95, linetype="dashed", color="#555555", size=0.8)
-        + facet_wrap("element", ncol=4, labeller="label_value")
-        + scale_fill_manual(values=fill_vals,
-                            labels=[SAMPLER_LABELS.get(s, s) for s in sampler_order])
-        + scale_x_discrete(labels=[SAMPLER_LABELS.get(s, s) for s in sampler_order])
-        + scale_y_continuous(breaks=[80, 85, 90, 95, 100])
-        + coord_cartesian(ylim=(80, 100))
-        + labs(x="Sampler", y="Coverage (%)", fill="Sampler",
-               title="95% CI Coverage of Δ - Standard Model")
-        + theme_bw()
-        + theme(figure_size=(14, 7), axis_text_x=element_text(size=8),
-                plot_title=element_text(size=11))
-    )
-    return p
-
-
 # ----------------------------------------------------------------------------- #
 # Shared per-parameter boxplot core (beta AND mu use the same 1x4 layout).
 # ----------------------------------------------------------------------------- #
@@ -583,33 +531,11 @@ def _param_boxplot(df: pd.DataFrame, y_col: str, y_label: str,
 # ----------------------------------------------------------------------------- #
 # Beta recovery (unit-level coefficients; schema identical to the mixture pipeline).
 # ----------------------------------------------------------------------------- #
-def compute_beta_correlation(df_summary=None) -> pd.DataFrame:
-    """Compute per-run per-param Pearson correlation between post_mean and true_value.
-
-    Loads beta_summary.csv (large) and returns one row per
-    (dataset_key, scenario, k_true, data_seed, k_model, sampler, n_chains, param)
-    with a `correlation` column: corr_i(post_mean_i, true_value_i) across the units.
-    """
-    if df_summary is None:
-        df_summary = load_recovery("beta_summary")
-    group_cols = [
-        "dataset_key", "scenario", "k_true", "data_seed",
-        "k_model", "sampler", "n_chains", "param",
-    ]
-    corr = (
-        df_summary.groupby(group_cols, observed=True)
-        .apply(lambda g: g["post_mean"].corr(g["true_value"]), include_groups=False)
-        .reset_index()
-        .rename(columns={0: "correlation"})
-    )
-    return corr
-
-
 def compute_beta_post_std(df_summary=None) -> pd.DataFrame:
     """Mean posterior SD of the unit-level coefficients beta_i, per run and parameter.
 
     The aggregated beta_recovery table drops the posterior SD (it keeps only bias / rmse /
-    coverage), so - like compute_beta_correlation - this reads beta_summary.csv (large,
+    coverage), so this reads beta_summary.csv (large,
     one row per unit x param) and averages the per-unit `post_std` over the N decision
     units. Returns one row per
     (dataset_key, scenario, k_true, data_seed, k_model, sampler, n_chains, param)
@@ -690,72 +616,9 @@ def beta_sd_by_param(n_chains: int = 2, sd_df=None, *, jitter: bool = True) -> g
                           "SD of β - Standard Model", sampler_order, jitter=jitter)
 
 
-def beta_correlation_by_param(n_chains: int = 2, corr_df=None, *, jitter: bool = True) -> ggplot:
-    """Pearson correlation between posterior mean and true beta_i across units, per parameter.
-
-    Each point is one seed: corr_i(post_mean_i, true_value_i) over the decision units.
-    Values near 1 mean the sampler correctly ranks individuals by their true preferences.
-    Faceted by parameter (Alt1/Alt2/Alt3/Price) in a single row of 4 panels.
-    """
-    if corr_df is None:
-        print("[beta_correlation_by_param] loading beta_summary to compute correlations ...")
-        corr_df = compute_beta_correlation()
-    sub = _apply_filters(corr_df, {"n_chains": n_chains}).copy()
-    if sub.empty:
-        raise ValueError(f"No beta correlation rows for n_chains={n_chains}.")
-    sampler_order = [s for s in SAMPLER_ORDER if s in set(sub["sampler"])]
-    sub["sampler"] = pd.Categorical(sub["sampler"], categories=sampler_order, ordered=True)
-    counts = sub.groupby("sampler", observed=True)["data_seed"].nunique().to_dict()
-    print(f"[beta_correlation_by_param] n_chains={n_chains}: seeds/sampler={counts}")
-    return _param_boxplot(sub, "correlation", "r(β̂, β)",
-                          "r(β̂, β) by Parameter - Standard Model",
-                          sampler_order, jitter=jitter)
-
-
-def beta_coverage_by_param(n_chains: int = 2, df=None) -> ggplot:
-    """Empirical 95% CI coverage of individual beta_i posteriors, per parameter.
-
-    coverage95 = fraction of units whose true beta_i falls inside the posterior 95% CI,
-    averaged over replicate seeds. Dashed reference line at 95%.
-    """
-    df = load_recovery("beta") if df is None else df
-    sub = _apply_filters(df, {"n_chains": n_chains}).copy()
-    if sub.empty:
-        raise ValueError(f"No beta_recovery rows for n_chains={n_chains}.")
-
-    cov = (
-        sub.groupby(["param", "sampler"], observed=True)["coverage95"]
-        .mean().mul(100).reset_index()
-        .rename(columns={"coverage95": "coverage_pct"})
-    )
-    sampler_order = [s for s in SAMPLER_ORDER if s in set(cov["sampler"])]
-    param_order = [p for p in _PARAM_ORDER if p in set(cov["param"])]
-    cov["sampler"] = pd.Categorical(cov["sampler"], categories=sampler_order, ordered=True)
-    cov["param"] = pd.Categorical(cov["param"], categories=param_order, ordered=True)
-    fill_vals = [SAMPLER_COLORS[s] for s in sampler_order]
-
-    p = (
-        ggplot(cov, aes(x="sampler", y="coverage_pct", fill="sampler"))
-        + geom_col(width=0.6)
-        + geom_hline(yintercept=95, linetype="dashed", color="#555555", size=0.8)
-        + facet_wrap("param", ncol=4, labeller="label_value")
-        + scale_fill_manual(values=fill_vals,
-                            labels=[SAMPLER_LABELS.get(s, s) for s in sampler_order])
-        + scale_x_discrete(labels=[SAMPLER_LABELS.get(s, s) for s in sampler_order])
-        + scale_y_continuous(breaks=[80, 85, 90, 95, 100])
-        + coord_cartesian(ylim=(80, 100))
-        + labs(x="Sampler", y="Coverage (%)", fill="Sampler",
-               title="95% CI Coverage of β - Standard Model")
-        + theme_bw()
-        + theme(figure_size=(12, 5), axis_text_x=element_text(size=8),
-                plot_title=element_text(size=11))
-    )
-    return p
-
-
 # ----------------------------------------------------------------------------- #
 # Mu recovery (NEW for the standard model: the population mean vs TRUE_MU is a
-# plain 4-vector at K = 1, so per-parameter bias/coverage is directly meaningful).
+# plain 4-vector at K = 1, so per-parameter bias is directly meaningful).
 # ----------------------------------------------------------------------------- #
 def mu_bias_by_param(n_chains: int = 2, df=None, *, jitter: bool = True) -> ggplot:
     """Bias of the population mean mu (post_mean - true_value) per parameter.
@@ -774,49 +637,6 @@ def mu_bias_by_param(n_chains: int = 2, df=None, *, jitter: bool = True) -> ggpl
     print(f"[mu_bias_by_param] n_chains={n_chains}: seeds/sampler={counts}")
     return _param_boxplot(sub, "bias", "Bias (μ̂−μ)",
                           "Bias of μ - Standard Model", sampler_order, jitter=jitter)
-
-
-def mu_coverage_by_param(n_chains: int = 2, df=None) -> ggplot:
-    """Empirical 95% CI coverage rate for each mu parameter, per sampler.
-
-    Coverage = (number of seeds where TRUE_MU[p] falls in the 95% credible interval)
-               / n_sim * 100. One bar per sampler per parameter; dashed reference at 95%.
-    """
-    df = load_recovery("mu") if df is None else df
-    df = df.copy()
-    df["in_ci"] = df["in_ci"].astype(bool)
-    sub = _apply_filters(df, {"n_chains": n_chains}).copy()
-    if sub.empty:
-        raise ValueError(f"No mu_recovery rows for n_chains={n_chains}.")
-
-    cov = (
-        sub.groupby(["param", "sampler"], observed=True)["in_ci"]
-        .mean().mul(100).reset_index()
-        .rename(columns={"in_ci": "coverage_pct"})
-    )
-    sampler_order = [s for s in SAMPLER_ORDER if s in set(cov["sampler"])]
-    param_order = [p for p in _PARAM_ORDER if p in set(cov["param"])]
-    cov["sampler"] = pd.Categorical(cov["sampler"], categories=sampler_order, ordered=True)
-    cov["param"] = pd.Categorical(cov["param"], categories=param_order, ordered=True)
-    fill_vals = [SAMPLER_COLORS[s] for s in sampler_order]
-
-    p = (
-        ggplot(cov, aes(x="sampler", y="coverage_pct", fill="sampler"))
-        + geom_col(width=0.6)
-        + geom_hline(yintercept=95, linetype="dashed", color="#555555", size=0.8)
-        + facet_wrap("param", ncol=4, labeller="label_value")
-        + scale_fill_manual(values=fill_vals,
-                            labels=[SAMPLER_LABELS.get(s, s) for s in sampler_order])
-        + scale_x_discrete(labels=[SAMPLER_LABELS.get(s, s) for s in sampler_order])
-        + scale_y_continuous(breaks=[80, 85, 90, 95, 100])
-        + coord_cartesian(ylim=(80, 100))
-        + labs(x="Sampler", y="Coverage (%)", fill="Sampler",
-               title="95% CI Coverage of μ - Standard Model")
-        + theme_bw()
-        + theme(figure_size=(12, 5), axis_text_x=element_text(size=8),
-                plot_title=element_text(size=11))
-    )
-    return p
 
 
 # ----------------------------------------------------------------------------- #

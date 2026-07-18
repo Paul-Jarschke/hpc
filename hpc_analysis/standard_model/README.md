@@ -28,7 +28,7 @@ diagnostics on the two grid scenarios full / chebyshev, sampler diagnostics).
 
 3. **Tables**: `.venv/Scripts/python.exe hpc_analysis/standard_model/make_tables.py`
    writes summary CSVs under `hpc_analysis/standard_model/out/<topic>/tables/`
-   (runtime, delta bias/MCSE + SD + RMSE + coverage, beta RMSE/correlation/coverage,
+   (runtime, delta bias/MCSE + SD + RMSE, beta bias/MCSE + SD + RMSE,
    mu recovery, sigma recovery incl. the `empirical` reference column, marginal
    distance summaries per grid, marginal ESS/R-hat summaries, consolidated RMSE).
 
@@ -39,7 +39,7 @@ diagnostics on the two grid scenarios full / chebyshev, sampler diagnostics).
 - `plot_recovery.py` - data loading (`load_recovery`, `RECOVERY_FILES`), the general
   `recovery_boxplot` core, sampler palette (`SAMPLER_ORDER/LABELS/COLORS`), all
   Delta/beta plot functions ported from `../mixture_models/`, plus the
-  standard-model-specific `mu_bias_by_param` / `mu_coverage_by_param` and
+  standard-model-specific `mu_bias_by_param` and
   `sigma_bias_faceted_by_element` analyses, runtime and consolidated-RMSE plots.
 - `make_plots.py` / `make_tables.py` - the two entry points (see above).
 - `marginal_diag.py` - ESS/R-hat of the marginal-density and moment series, per grid.
