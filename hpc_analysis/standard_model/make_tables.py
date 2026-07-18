@@ -644,6 +644,38 @@ def retained_mass_summary_table(n_chains: int = CHAINS, grid: str = "chebyshev")
     ).reset_index(drop=True)
 
 
+def kl_inf_summary_table(n_chains: int = CHAINS, grid: str = "chebyshev") -> pd.DataFrame:
+    """Count of seeds where KL(model||true) came back +inf, by sampler and parameter -
+    a direct measure of catastrophic tail mismatch (the fitted marginal puts mass where
+    the true DGP density is ~0). `grid` selects the evaluation-grid scenario ('full' is
+    far more prone to this than the 'chebyshev'-trimmed grid).
+
+    Returns a tidy long DataFrame:
+        rows    = (param, sampler)
+        columns = n_inf, n_total, inf_rate
+    """
+    df = load_recovery("marginal_distances")
+    if "grid" in df.columns:
+        df = df[df["grid"] == grid]
+    df = df[df["n_chains"] == n_chains].copy()
+    if "KL" not in df.columns:
+        raise ValueError("Column 'KL' not in marginal_distances.")
+    df["is_inf"] = ~np.isfinite(df["KL"])
+
+    agg = (
+        df.groupby(["param", "sampler"], observed=True)["is_inf"]
+        .agg(n_inf="sum", n_total="count").reset_index()
+    )
+    agg["inf_rate"] = (agg["n_inf"] / agg["n_total"]).round(4)
+    samplers_present = [s for s in SAMPLER_ORDER if s in agg["sampler"].unique()]
+    agg["sampler"] = pd.Categorical(agg["sampler"], categories=samplers_present, ordered=True)
+    agg["sampler_label"] = agg["sampler"].map(SAMPLER_LABELS)
+    agg = agg.sort_values(["param", "sampler"])
+    return agg[["param", "sampler_label", "n_inf", "n_total", "inf_rate"]].rename(
+        columns={"sampler_label": "sampler"}
+    ).reset_index(drop=True)
+
+
 def consolidated_rmse_table(n_chains: int = CHAINS) -> pd.DataFrame:
     """Consolidated RMSE across ALL elements of a parameter block (beta / Delta),
     by sampler.
@@ -812,6 +844,15 @@ def main():
     path = out_dir / f"retained_mass_summary_c{CHAINS}.csv"
     rmass.to_csv(path, index=False)
     print(f"wrote {len(rmass)} rows -> {path}")
+
+    # --- KL = inf count tables (one per evaluation grid - 'full' is far more prone to this) ---
+    for grid in GRIDS:
+        out_dir = out_marginal / GRID_FOLDER[grid] / "tables"
+        out_dir.mkdir(parents=True, exist_ok=True)
+        kinf = kl_inf_summary_table(grid=grid)
+        path = out_dir / f"kl_inf_summary_c{CHAINS}.csv"
+        kinf.to_csv(path, index=False)
+        print(f"wrote {len(kinf)} rows -> {path}")
 
 
 if __name__ == "__main__":

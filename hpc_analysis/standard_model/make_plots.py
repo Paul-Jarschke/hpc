@@ -39,6 +39,7 @@ from plot_recovery import (  # noqa: E402
     marginal_metric_boxplot,
     marginal_distances_faceted_by_metric,
     retained_mass_boxplot,
+    kl_inf_count_plot,
     MARGINAL_METRICS,
     runtime_by_sampler,
     consolidated_rmse_boxplot,
@@ -124,6 +125,14 @@ def main():
              f"marginal_comparison/{GRID_FOLDER['chebyshev']}/plots/retained_mass_boxplot.png")
     except ValueError as e:
         print(f"  skip retained_mass_boxplot: {e}")
+
+    # KL = inf counts (one per evaluation grid - 'full' is far more prone to this).
+    for grid in GRIDS:
+        try:
+            save(kl_inf_count_plot(CHAINS, grid=grid),
+                 f"marginal_comparison/{GRID_FOLDER[grid]}/plots/kl_inf_count.png")
+        except ValueError as e:
+            print(f"  skip kl_inf_count ({grid}): {e}")
 
     # Marginal-series convergence: ESS/R-hat grids (density x mean x variance) + density-only
     # figures, under marginal_comparison/ (density series once per grid).

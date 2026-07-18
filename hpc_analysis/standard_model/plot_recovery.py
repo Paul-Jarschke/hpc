@@ -983,6 +983,52 @@ def retained_mass_boxplot(n_chains: int = 2, df=None, *, grid: str = "chebyshev"
     return p
 
 
+def kl_inf_count_plot(n_chains: int = 2, df=None, *, grid: str = "chebyshev") -> ggplot:
+    """Number of seeds where KL(model||true) came back +inf (catastrophic tail
+    mismatch: the fitted marginal puts mass where the true DGP density is ~0).
+
+    x-axis = sampler, faceted by parameter (4 panels). y = raw count of +inf seeds out
+    of ~100. `grid` selects the evaluation-grid scenario the distances were computed on -
+    the 'full' envelope is far more prone to this than the 'chebyshev'-trimmed grid.
+    """
+    df = load_recovery("marginal_distances") if df is None else df
+    if "grid" in df.columns:
+        df = df[df["grid"] == grid]
+    sub = df[df["n_chains"] == n_chains].copy()
+    if sub.empty:
+        raise ValueError(f"No marginal_distances rows for n_chains={n_chains}, grid={grid!r}.")
+    if "KL" not in sub.columns:
+        raise ValueError("Column 'KL' not in marginal_distances.")
+
+    sub["is_inf"] = ~np.isfinite(sub["KL"])
+    cnt = (
+        sub.groupby(["param", "sampler"], observed=True)["is_inf"]
+        .sum().reset_index().rename(columns={"is_inf": "n_inf"})
+    )
+
+    sampler_order = [s for s in SAMPLER_ORDER if s in set(cnt["sampler"])]
+    param_order = [p for p in _PARAM_ORDER if p in set(cnt["param"])]
+    cnt["sampler"] = pd.Categorical(cnt["sampler"], categories=sampler_order, ordered=True)
+    cnt["param"] = pd.Categorical(cnt["param"], categories=param_order, ordered=True)
+
+    fill_vals = [SAMPLER_COLORS[s] for s in sampler_order]
+
+    p = (
+        ggplot(cnt, aes(x="sampler", y="n_inf", fill="sampler"))
+        + geom_col(width=0.6)
+        + facet_wrap("param", ncol=4, labeller="label_value")
+        + scale_fill_manual(values=fill_vals,
+                            labels=[SAMPLER_LABELS.get(s, s) for s in sampler_order])
+        + scale_x_discrete(labels=[SAMPLER_LABELS.get(s, s) for s in sampler_order])
+        + labs(x="Sampler", y="# seeds with KL = inf", fill="Sampler",
+               title=f"KL Divergence: Infinite-Value Count ({grid} grid)")
+        + theme_bw()
+        + theme(figure_size=(12, 4.5), axis_text_x=element_text(size=8),
+                plot_title=element_text(size=11))
+    )
+    return p
+
+
 def marginal_distances_faceted_by_metric(n_chains: int = 2, df=None, *,
                                           grid: str = "chebyshev") -> ggplot:
     """All five distance metrics in one figure.

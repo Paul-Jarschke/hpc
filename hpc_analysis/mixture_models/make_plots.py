@@ -32,6 +32,7 @@ from plot_recovery import (  # noqa: E402
     marginal_distance_by_ktrue,
     marginal_distances_faceted_by_metric,
     retained_mass_boxplot,
+    kl_inf_count_plot,
     MARGINAL_METRICS,
     runtime_by_ktrue,
     runtime_samplers_by_ktrue,
@@ -122,6 +123,14 @@ def main():
              f"marginal_comparison/{GRID_FOLDER['chebyshev']}/plots/retained_mass_boxplot.png")
     except ValueError as e:
         print(f"  skip retained_mass_boxplot: {e}")
+
+    # KL = inf counts (one per evaluation grid - 'full' is far more prone to this).
+    for grid in GRIDS:
+        try:
+            save(kl_inf_count_plot(CHAINS, grid=grid),
+                 f"marginal_comparison/{GRID_FOLDER[grid]}/plots/kl_inf_count.png")
+        except ValueError as e:
+            print(f"  skip kl_inf_count ({grid}): {e}")
 
     # Component-count: effective-K boxplot, est_k confusion by k_true, and the sorted
     # weight profiles (after-ECR + before/after) under components/.
