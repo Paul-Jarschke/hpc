@@ -199,6 +199,12 @@ def _emit(out: str, name: str, colspec: str, header: str, rows: list[str],
           *, longtable: bool | None = None) -> None:
     if longtable is None:
         longtable = len(rows) > _LONGTABLE_THRESHOLD
+    # Structural guard: every row (and the header) must match the column spec -
+    # a mismatch means a generator bug and would not compile in LaTeX.
+    ncol = sum(colspec.count(c) for c in "lcr")
+    for cells in [header, *rows]:
+        n = cells.count(" & ") + 1
+        assert n == ncol, f"{name}: {n} cells vs {ncol}-column spec: {cells[:80]!r}"
     body = " \\\\\n".join(rows) + " \\\\"
     if longtable:
         _LONGTABLES.append(name)
@@ -287,7 +293,8 @@ def _dist_table(out: str, name: str, df: pd.DataFrame, id_cols: list[str],
         return cells
 
     lead = ("$K_{\\text{true}}$ & " if has_kt else "")
-    header = lead + f"{id_hdr} & Sampler & {_STATS_HDR}" + (f" & {extra_hdr}" if extra_hdr else "")
+    id_part = f"{id_hdr} & " if id_hdr else ""      # runtime has NO id columns
+    header = lead + id_part + f"Sampler & {_STATS_HDR}" + (f" & {extra_hdr}" if extra_hdr else "")
     colspec = ("c" if has_kt else "") + "l" * len(id_cols) + "l" + "c" * (6 + len(extra))
     _emit(out, name, colspec, header, _grouped_rows(df, group_cols, group_fmt, value_fn))
 
@@ -566,7 +573,8 @@ def component_thresholds(out: str) -> None:
     df = _samp_ordered(df).sort_values([kt, "sampler", th], kind="stable")
 
     def value_fn(r):
-        return [str(r["sampler"]), _num(r[th], 3), _num(r[mest], 3), _num(r[fco], 3)]
+        # sampler is already a grouped leading column - do NOT re-emit it here
+        return [_num(r[th], 3), _num(r[mest], 3), _num(r[fco], 3)]
 
     header = "$K_{\\text{true}}$ & Sampler & threshold & mean $\\hat K$ & frac.\\ correct"
     _emit(out, "component_thresholds.tex", "cl" + "ccc", header,
