@@ -38,7 +38,7 @@ Two tiers of fragments are produced:
       agg_convergence.tex     (both)      one row per sampler (x K_true), computed on
                                           the marginal's MEAN functional and pooled
                                           over coefficients x seeds: mean/median/max
-                                          R-hat + frac <= 1.1, median bulk/tail ESS.
+                                          R-hat + frac <= 1.1, median ESS (bulk)/(tail).
       agg_marginal.tex        (both)      median distance (median over seeds, then
                                           median over the 4 coefficients) per
                                           grid x metric (x K_true), samplers as columns.
@@ -51,7 +51,7 @@ Design
     chain; per-seed values from marginal_diagnostics.csv) - never for individual
     model parameters (mu/Delta/Sigma) and with no per-functional breakdown. R-hat is
     summarised over the seeds as mean / median / max + frac(R-hat <= 1.1); ESS as
-    ONE median bulk and ONE median tail ESS per coefficient.
+    ONE median ESS (bulk) and ONE median ESS (tail) per coefficient.
   * distribution tables: full min / Q1 / mean / median / Q3 / max (+ extra columns).
   * mixture study: one COMBINED table per family with k_true as a grouped leading
     column (blank on repeat); standard study is a single k_true = 1 cell.
@@ -452,7 +452,7 @@ def convergence_rhat(out: str, data_root: str, has_kt: bool) -> None:
 
 
 def convergence_ess(out: str, root: str, has_kt: bool) -> None:
-    """Marginal ESS, Liesel-summary style: ONE median bulk and ONE median tail ESS
+    """Marginal ESS, Liesel-summary style: ONE median ESS (bulk) and ONE median ESS (tail)
     per coefficient x sampler, computed on the marginal's MEAN functional only (the
     location chain of the heterogeneity marginal - in the standard model exactly the
     mu_p chain, i.e. the per-parameter ESS a Goose/Liesel summary table reports)."""
@@ -475,7 +475,7 @@ def convergence_ess(out: str, root: str, has_kt: bool) -> None:
         return [str(r["sampler"]), _num(r[mb], 0), _num(r[mt], 0)]
 
     lead = ("$K_{\\text{true}}$ & " if has_kt else "")
-    header = lead + "Coefficient & Sampler & median bulk ESS & median tail ESS"
+    header = lead + "Coefficient & Sampler & median ESS (bulk) & median ESS (tail)"
     colspec = ("c" if has_kt else "") + "ll" + "cc"
     _emit(out, "convergence_ess.tex", colspec, header, _grouped_rows(df, group_cols, group_fmt, value_fn))
 
@@ -622,7 +622,7 @@ def agg_delta_recovery_mix(out: str) -> None:
 def agg_convergence(out: str, data_root: str, has_kt: bool) -> None:
     """One row per sampler (x K_true), all computed on the marginal's MEAN functional
     only and pooled over coefficients x seeds (per-seed marginal_diagnostics.csv):
-    mean / median / max R-hat, frac(R-hat <= 1.1), and median bulk/tail ESS."""
+    mean / median / max R-hat, frac(R-hat <= 1.1), and median ESS (bulk)/(tail)."""
     df = _read(_find([os.path.join(data_root, "marginal_diagnostics.csv")]),
                "aggregate: marginal R-hat/ESS (per-seed)")
     if df is None:
@@ -650,7 +650,7 @@ def agg_convergence(out: str, data_root: str, has_kt: bool) -> None:
     lead = "$K_{\\text{true}}$ & " if has_kt else ""
     header = (lead + "Sampler & mean $\\widehat{R}$ & median $\\widehat{R}$ & "
               "max $\\widehat{R}$ & frac.\\ $\\widehat{R}\\leq1.1$ & "
-              "median bulk ESS & median tail ESS")
+              "median ESS (bulk) & median ESS (tail)")
     group_cols = ["k_true"] if has_kt else []
     group_fmt = [lambda v: str(int(v))] if has_kt else []
     _emit(out, "agg_convergence.tex", ("c" if has_kt else "") + "l" + "c" * 6, header,

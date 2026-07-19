@@ -77,10 +77,10 @@ FUNC_LABELS = {"mean": "Mean", "sd": "SD", "q05": "Q05", "q50": "Median", "q95":
 # (its scale is sampler-dependent), so no reference line.
 METRIC_CFG = {
     "Rhat":           ("R̂", False, RHAT_THRESH, "R̂"),
-    "ESS_bulk":       ("ESS (bulk, log)", True, ESS_MIN, "Bulk ESS"),
-    "ESS_tail":       ("ESS (tail, log)", True, ESS_MIN, "Tail ESS"),
-    "ESS_bulk_per_s": ("ESS/s (bulk, log)", True, None, "Bulk ESS/s"),
-    "ESS_tail_per_s": ("ESS/s (tail, log)", True, None, "Tail ESS/s"),
+    "ESS_bulk":       ("ESS (bulk, log)", True, ESS_MIN, "ESS (bulk)"),
+    "ESS_tail":       ("ESS (tail, log)", True, ESS_MIN, "ESS (tail)"),
+    "ESS_bulk_per_s": ("ESS/s (bulk, log)", True, None, "ESS/s (bulk)"),
+    "ESS_tail_per_s": ("ESS/s (tail, log)", True, None, "ESS/s (tail)"),
 }
 
 DIR_OUT_BASE = DIR_FIG / "marginal_comparison"
@@ -156,12 +156,12 @@ def plot_rhat_grid(n_chains: int = 2, df: Optional[pd.DataFrame] = None) -> ggpl
 
 
 def plot_ess_bulk_grid(n_chains: int = 2, df: Optional[pd.DataFrame] = None) -> ggplot:
-    """Bulk ESS (log scale) of the marginal mean x 4 params, by k_true."""
+    """ESS (bulk, log scale) of the marginal mean x 4 params, by k_true."""
     return _diag_grid(load_diag(n_chains, df=df), "ESS_bulk", n_chains)
 
 
 def plot_ess_tail_grid(n_chains: int = 2, df: Optional[pd.DataFrame] = None) -> ggplot:
-    """Tail ESS (log scale) of the marginal mean x 4 params, by k_true."""
+    """ESS (tail, log scale) of the marginal mean x 4 params, by k_true."""
     return _diag_grid(load_diag(n_chains, df=df), "ESS_tail", n_chains)
 
 
