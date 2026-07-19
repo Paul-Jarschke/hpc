@@ -54,7 +54,9 @@ Design
     ONE median ESS (bulk) and ONE median ESS (tail) per coefficient.
   * distribution tables: full min / Q1 / mean / median / Q3 / max (+ extra columns).
   * mixture study: one COMBINED table per family with k_true as a grouped leading
-    column (blank on repeat); standard study is a single k_true = 1 cell.
+    column (blank on repeat); standard study is a single k_true = 1 cell. Exception:
+    delta recovery is emitted as one table PER scenario (delta_recovery_kt{1,2,3,5}.tex,
+    each mirroring the standard study's per-element layout).
   * columns matched case-insensitively/defensively; a table whose source CSV or
     columns are missing is reported and skipped, never written with wrong numbers.
 """
@@ -301,7 +303,15 @@ def delta_recovery(out: str, root: str, has_kt: bool) -> None:
     if long is None:
         print(f"  !! delta recovery: unexpected columns {list(df.columns)}")
         return
-    _recovery_table(out, "delta_recovery.tex", long, "element", has_kt)
+    if has_kt:
+        # One SEPARATE table per scenario, mirroring the standard study's layout
+        # (8 elements x samplers, no k_true column; each fits a normal table float).
+        for kt in sorted(long["k_true"].unique()):
+            sub = long[long["k_true"] == kt].drop(columns="k_true")
+            _recovery_table(out, f"delta_recovery_kt{int(kt)}.tex", sub, "element",
+                            has_kt=False)
+    else:
+        _recovery_table(out, "delta_recovery.tex", long, "element", has_kt)
 
 
 def mu_recovery(out: str) -> None:
