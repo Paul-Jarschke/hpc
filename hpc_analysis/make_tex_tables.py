@@ -54,9 +54,11 @@ Design
     ONE median ESS (bulk) and ONE median ESS (tail) per coefficient.
   * distribution tables: full min / Q1 / mean / median / Q3 / max (+ extra columns).
   * mixture study: one COMBINED table per family with k_true as a grouped leading
-    column (blank on repeat); standard study is a single k_true = 1 cell. Exception:
-    delta recovery is emitted as one table PER scenario (delta_recovery_kt{1,2,3,5}.tex,
-    each mirroring the standard study's per-element layout).
+    column (blank on repeat); standard study is a single k_true = 1 cell. Exceptions
+    (matching the per-k_true plot files): delta recovery, delta posterior SD and the
+    marginal distances are emitted as one table PER scenario
+    (delta_recovery_kt{1,2,3,5}.tex, delta_sd_kt*.tex, marginal_distances_<grid>_kt*.tex),
+    each mirroring the standard study's layout.
   * columns matched case-insensitively/defensively; a table whose source CSV or
     columns are missing is reported and skipped, never written with wrong numbers.
 """
@@ -345,7 +347,14 @@ def delta_sd(out: str, root: str, has_kt: bool) -> None:
         return
     if not _need(df, "delta SD", _col(df, "element"), _col(df, "sampler")):
         return
-    _dist_table(out, "delta_sd.tex", df, ["element"], [_tex_label], "Coefficient", has_kt)
+    if has_kt:
+        # One table per scenario, matching the per-k_true delta_sd_elements plots.
+        for kt in sorted(df["k_true"].unique()):
+            sub = df[df["k_true"] == kt].drop(columns="k_true")
+            _dist_table(out, f"delta_sd_kt{int(kt)}.tex", sub, ["element"], [_tex_label],
+                        "Coefficient", has_kt=False)
+    else:
+        _dist_table(out, "delta_sd.tex", df, ["element"], [_tex_label], "Coefficient", has_kt)
 
 
 def runtime(out: str, root: str, has_kt: bool) -> None:
@@ -371,8 +380,15 @@ def marginal_distances(out: str, root: str, has_kt: bool, grid: str) -> None:
     df = df.copy()
     df[m] = pd.Categorical(df[m], categories=METRIC_CAT, ordered=True)
     df = df[df[m].notna()]          # keep only the reported metrics (KL, TVD)
-    _dist_table(out, f"marginal_distances_{grid}.tex", df, [m, p],
-                [str, _tex_escape], "Metric & Coefficient", has_kt, nd=4)
+    if has_kt:
+        # One table per scenario, matching the per-k_true all_metrics_kt{k} plots.
+        for kt in sorted(df["k_true"].unique()):
+            sub = df[df["k_true"] == kt].drop(columns="k_true")
+            _dist_table(out, f"marginal_distances_{grid}_kt{int(kt)}.tex", sub, [m, p],
+                        [str, _tex_escape], "Metric & Coefficient", has_kt=False, nd=4)
+    else:
+        _dist_table(out, f"marginal_distances_{grid}.tex", df, [m, p],
+                    [str, _tex_escape], "Metric & Coefficient", has_kt, nd=4)
 
 
 def retained_mass(out: str, root: str, has_kt: bool) -> None:
