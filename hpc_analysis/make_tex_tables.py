@@ -35,13 +35,10 @@ Two tiers of fragments are produced:
                                           mean/max MSE.
       agg_delta_recovery.tex  (mixture)   same aggregation over the 8 Delta elements,
                                           per K_true x sampler.
-      agg_convergence.tex     (standard)  one row per sampler, pooled over all
-                                          marginal functionals x coefficients x seeds:
-                                          mean/median/max R-hat + frac <= 1.1,
-                                          plus median bulk/tail ESS.
-                              (mixture)   per K_true x sampler, pooled over ALL
-                                          functionals x coefficients: median/max R-hat,
-                                          share of converged cells, median bulk/tail ESS.
+      agg_convergence.tex     (both)      one row per sampler (x K_true), computed on
+                                          the marginal's MEAN functional and pooled
+                                          over coefficients x seeds: mean/median/max
+                                          R-hat + frac <= 1.1, median bulk/tail ESS.
       agg_marginal.tex        (both)      median distance (median over seeds, then
                                           median over the 4 coefficients) per
                                           grid x metric (x K_true), samplers as columns.
@@ -49,11 +46,12 @@ Two tiers of fragments are produced:
 Design
   * recovery cells: `bias (mcse)` and `mse (mcse)` (4 dp); Unicode element labels
     Δ₁,₁ / Σ₁,₁ become $\Delta_{1,1}$ / $\Sigma_{1,1}$.
-  * convergence: R-hat/ESS are reported for the MARGINAL-density functionals only
-    (mean/SD/Q05/median/Q95 of the heterogeneity marginals) - never for individual
-    model parameters (mu/Delta/Sigma). The standard R-hat table summarises the
-    per-seed values (marginal_diagnostics.csv) as mean / median / max R-hat +
-    frac(R-hat <= 1.1); ESS tables report only the median bulk and median tail ESS.
+  * convergence (Liesel-summary style, both studies): R-hat and ESS are computed on
+    the MEAN functional of each coefficient's heterogeneity marginal (its location
+    chain; per-seed values from marginal_diagnostics.csv) - never for individual
+    model parameters (mu/Delta/Sigma) and with no per-functional breakdown. R-hat is
+    summarised over the seeds as mean / median / max + frac(R-hat <= 1.1); ESS as
+    ONE median bulk and ONE median tail ESS per coefficient.
   * distribution tables: full min / Q1 / mean / median / Q3 / max (+ extra columns).
   * mixture study: one COMBINED table per family with k_true as a grouped leading
     column (blank on repeat); standard study is a single k_true = 1 cell.
@@ -75,18 +73,16 @@ REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 STD = os.path.join(REPO, "hpc_analysis", "standard_model", "out")
 MIX = os.path.join(REPO, "hpc_analysis", "mixture_models", "out")
 DATA_STD = os.path.join(REPO, "data", "out", "standard_model")   # per-seed marginal diagnostics
+DATA_MIX = os.path.join(REPO, "data", "out", "mixture_c2")
 
 SAMPLER_LABEL = {
     "bayesm": "bayesm", "bayesm_gibbs": "Replication", "replication": "Replication",
     "nuts": "NUTS", "hmc": "HMC",
 }
 SAMP_CAT = ["bayesm", "Replication", "NUTS", "HMC"]     # display order
-KT_ORDER = [1, 2, 3, 5]
 # Only the metrics reported in the thesis: KLD + TVD (Hellinger/JSD are still in the
 # source CSVs but are dropped from the tex tables; Wasserstein was removed upstream).
 METRIC_CAT = ["KL", "TVD"]
-FUNC_CAT = ["mean", "sd", "q05", "q50", "q95"]
-FUNC_LABEL = {"mean": "mean", "sd": "SD", "q05": "Q05", "q50": "median", "q95": "Q95"}
 
 _LONGTABLE_THRESHOLD = 34          # switch tabular -> longtable above this many body rows
 _LONGTABLES: list[str] = []        # collected for the closing note
@@ -419,14 +415,13 @@ def kl_inf(out: str, root: str, has_kt: bool) -> None:
 # ----------------------------------------------------------------------
 # convergence (R-hat + ESS)
 # ----------------------------------------------------------------------
-def std_convergence_rhat(out: str) -> None:
-    """Standard study: R-hat of the MARGINAL-density functionals (mean/SD/Q05/median/
-    Q95 of the heterogeneity marginals; per-seed values from marginal_diagnostics.csv)
-    - NOT the individual model parameters. Per functional x coefficient x sampler,
-    summarised over the 100 seeds: mean / median / max R-hat and the fraction of runs
-    with R-hat <= 1.1."""
-    df = _read(_find([os.path.join(DATA_STD, "marginal_diagnostics.csv")]),
-               "marginal R-hat (per-seed marginal_diagnostics.csv)")
+def convergence_rhat(out: str, data_root: str, has_kt: bool) -> None:
+    """R-hat of the marginal's MEAN functional only (the location chain of each
+    coefficient's heterogeneity marginal) - Liesel-summary style, matching the ESS
+    tables. Per coefficient x sampler, summarised over the seeds: mean / median /
+    max R-hat and the fraction of runs with R-hat <= 1.1."""
+    df = _read(_find([os.path.join(data_root, "marginal_diagnostics.csv")]),
+               "marginal R-hat (per-seed)")
     if df is None:
         return
     f, p, r = _col(df, "functional"), _col(df, "param"), _col(df, "rhat")
@@ -434,59 +429,33 @@ def std_convergence_rhat(out: str) -> None:
         return
     if "n_chains" in df.columns:
         df = df[df["n_chains"] == 2]
-    df = df.dropna(subset=[r])
+    df = df[df[f].astype(str).str.lower() == "mean"].dropna(subset=[r])
     df = _samp_ordered(df)
-    df[f] = pd.Categorical(df[f], categories=FUNC_CAT, ordered=True)
-    agg = (df.groupby([f, p, "sampler"], observed=True)[r]
+    keys = (["k_true"] if has_kt else []) + [p, "sampler"]
+    agg = (df.groupby(keys, observed=True)[r]
              .agg(rmean="mean", rmed="median", rmax="max",
                   rfrac=lambda x: (x <= 1.1).mean()).reset_index()
-             .sort_values([f, p, "sampler"], kind="stable"))
+             .sort_values(keys, kind="stable"))
 
     def value_fn(r_):
         return [str(r_["sampler"]), _num(r_["rmean"], 3), _num(r_["rmed"], 3),
                 _num(r_["rmax"], 3), _num(r_["rfrac"], 2)]
 
-    header = ("Functional & Coefficient & Sampler & mean $\\widehat{R}$ & "
-              "median $\\widehat{R}$ & max $\\widehat{R}$ & frac.\\ $\\widehat{R}\\leq1.1$")
-    _emit(out, "convergence_rhat.tex", "lllcccc", header,
-          _grouped_rows(agg, [f, p], [lambda v: FUNC_LABEL.get(v, str(v)), _tex_escape],
-                        value_fn))
-
-
-def convergence_rhat(out: str, root: str, has_kt: bool) -> None:
-    df = _read(_find([f"{root}/marginal_comparison/**/marginal_rhat_summary_c2.csv"]),
-               "convergence R-hat")
-    if df is None:
-        return
-    f, p = _col(df, "functional"), _col(df, "param")
-    med, q75, mx = _col(df, "median_rhat"), _col(df, "q75_rhat"), _col(df, "max_rhat")
-    fc = _col(df, "frac_converged")
-    if not _need(df, "R-hat", f, p, _col(df, "sampler"), med, mx, fc):
-        return
-    df = _samp_ordered(df)
-    df[f] = pd.Categorical(df[f], categories=FUNC_CAT, ordered=True)
-    sort_cols = (["k_true"] if has_kt else []) + [f, p, "sampler"]
-    df = df.sort_values(sort_cols, kind="stable")
-    group_cols = (["k_true"] if has_kt else []) + [f, p]
-    group_fmt = ([lambda v: str(int(v))] if has_kt else []) + [lambda v: FUNC_LABEL.get(v, str(v)), _tex_escape]
-
-    def value_fn(r):
-        cells = [str(r["sampler"]), _num(r[med], 3)]
-        cells += [_num(r[q75], 3)] if q75 else []
-        cells += [_num(r[mx], 3), _num(r[fc], 2)]
-        return cells
-
-    lead = ("$K_{\\text{true}}$ & " if has_kt else "")
-    q = " & Q75 $\\widehat{R}$" if q75 else ""
-    header = (lead + "Functional & Coefficient & Sampler & median $\\widehat{R}$" + q
-              + " & max $\\widehat{R}$ & frac.\\ $\\widehat{R}\\leq1.1$")
-    colspec = ("c" if has_kt else "") + "lll" + "c" * (3 + (1 if q75 else 0))
-    _emit(out, "convergence_rhat.tex", colspec, header, _grouped_rows(df, group_cols, group_fmt, value_fn))
+    lead = "$K_{\\text{true}}$ & " if has_kt else ""
+    header = (lead + "Coefficient & Sampler & mean $\\widehat{R}$ & median $\\widehat{R}$ & "
+              "max $\\widehat{R}$ & frac.\\ $\\widehat{R}\\leq1.1$")
+    group_cols = (["k_true"] if has_kt else []) + [p]
+    group_fmt = ([lambda v: str(int(v))] if has_kt else []) + [_tex_escape]
+    colspec = ("c" if has_kt else "") + "ll" + "cccc"
+    _emit(out, "convergence_rhat.tex", colspec, header,
+          _grouped_rows(agg, group_cols, group_fmt, value_fn))
 
 
 def convergence_ess(out: str, root: str, has_kt: bool) -> None:
-    """Marginal-series ESS: only the median bulk and median tail ESS are reported
-    (pass-rate and per-second columns are intentionally dropped)."""
+    """Marginal ESS, Liesel-summary style: ONE median bulk and ONE median tail ESS
+    per coefficient x sampler, computed on the marginal's MEAN functional only (the
+    location chain of the heterogeneity marginal - in the standard model exactly the
+    mu_p chain, i.e. the per-parameter ESS a Goose/Liesel summary table reports)."""
     df = _read(_find([f"{root}/marginal_comparison/**/marginal_ess_summary_c2.csv"]),
                "convergence ESS")
     if df is None:
@@ -495,19 +464,19 @@ def convergence_ess(out: str, root: str, has_kt: bool) -> None:
     mb, mt = _col(df, "median_ess_bulk"), _col(df, "median_ess_tail")
     if not _need(df, "ESS", f, p, _col(df, "sampler"), mb, mt):
         return
+    df = df[df[f].astype(str).str.lower() == "mean"]
     df = _samp_ordered(df)
-    df[f] = pd.Categorical(df[f], categories=FUNC_CAT, ordered=True)
-    sort_cols = (["k_true"] if has_kt else []) + [f, p, "sampler"]
+    sort_cols = (["k_true"] if has_kt else []) + [p, "sampler"]
     df = df.sort_values(sort_cols, kind="stable")
-    group_cols = (["k_true"] if has_kt else []) + [f, p]
-    group_fmt = ([lambda v: str(int(v))] if has_kt else []) + [lambda v: FUNC_LABEL.get(v, str(v)), _tex_escape]
+    group_cols = (["k_true"] if has_kt else []) + [p]
+    group_fmt = ([lambda v: str(int(v))] if has_kt else []) + [_tex_escape]
 
     def value_fn(r):
         return [str(r["sampler"]), _num(r[mb], 0), _num(r[mt], 0)]
 
     lead = ("$K_{\\text{true}}$ & " if has_kt else "")
-    header = lead + "Functional & Coefficient & Sampler & median bulk ESS & median tail ESS"
-    colspec = ("c" if has_kt else "") + "lll" + "cc"
+    header = lead + "Coefficient & Sampler & median bulk ESS & median tail ESS"
+    colspec = ("c" if has_kt else "") + "ll" + "cc"
     _emit(out, "convergence_ess.tex", colspec, header, _grouped_rows(df, group_cols, group_fmt, value_fn))
 
 
@@ -650,69 +619,42 @@ def agg_delta_recovery_mix(out: str) -> None:
                         "$K_{\\text{true}}$", "c", [lambda v: str(int(v))])
 
 
-def agg_convergence(out: str, root: str, has_kt: bool) -> None:
-    """Convergence pooled over ALL (functional x coefficient) cells per sampler:
-    median/max R-hat + convergence share, and the median bulk/tail ESS over cells."""
-    rhat = _read(_find([f"{root}/marginal_comparison/**/marginal_rhat_summary_c2.csv"]),
-                 "aggregate: R-hat")
-    ess = _read(_find([f"{root}/marginal_comparison/**/marginal_ess_summary_c2.csv"]),
-                "aggregate: ESS")
-    if rhat is None or ess is None:
-        return
-    med, mx, fc = _col(rhat, "median_rhat"), _col(rhat, "max_rhat"), _col(rhat, "frac_converged")
-    mb, mt = _col(ess, "median_ess_bulk", "median_ess"), _col(ess, "median_ess_tail")
-    if not _need(rhat, "agg R-hat", med, mx, fc) or not _need(ess, "agg ESS", mb, mt):
-        return
-    rhat, ess = _samp_ordered(rhat), _samp_ordered(ess)
-    keys = (["k_true"] if has_kt else []) + ["sampler"]
-    r_agg = (rhat.groupby(keys, observed=True)
-                 .agg(med_r=(med, "median"), max_r=(mx, "max"), fc=(fc, "mean")).reset_index())
-    e_agg = (ess.groupby(keys, observed=True)
-                .agg(med_b=(mb, "median"), med_t=(mt, "median")).reset_index())
-    df = r_agg.merge(e_agg, on=keys).sort_values(keys, kind="stable")
-
-    def value_fn(r):
-        return [str(r["sampler"]), _num(r["med_r"], 3), _num(r["max_r"], 2), _num(r["fc"], 2),
-                _num(r["med_b"], 0), _num(r["med_t"], 0)]
-
-    lead = "$K_{\\text{true}}$ & " if has_kt else ""
-    header = (lead + "Sampler & median $\\widehat{R}$ & max $\\widehat{R}$ & "
-              "frac.\\ $\\widehat{R}\\leq1.1$ & median bulk ESS & median tail ESS")
-    group_cols = ["k_true"] if has_kt else []
-    group_fmt = [lambda v: str(int(v))] if has_kt else []
-    _emit(out, "agg_convergence.tex", ("c" if has_kt else "") + "l" + "c" * 5, header,
-          _grouped_rows(df, group_cols, group_fmt, value_fn))
-
-
-def agg_convergence_standard(out: str) -> None:
-    """Standard study aggregate: one row per sampler, pooled over ALL marginal
-    functionals x coefficients x seeds (per-seed marginal_diagnostics.csv):
-    mean / median / max R-hat and the fraction of runs with R-hat <= 1.1, plus the
-    median bulk/tail ESS over the same pooled values."""
-    df = _read(_find([os.path.join(DATA_STD, "marginal_diagnostics.csv")]),
+def agg_convergence(out: str, data_root: str, has_kt: bool) -> None:
+    """One row per sampler (x K_true), all computed on the marginal's MEAN functional
+    only and pooled over coefficients x seeds (per-seed marginal_diagnostics.csv):
+    mean / median / max R-hat, frac(R-hat <= 1.1), and median bulk/tail ESS."""
+    df = _read(_find([os.path.join(data_root, "marginal_diagnostics.csv")]),
                "aggregate: marginal R-hat/ESS (per-seed)")
     if df is None:
         return
-    r = _col(df, "rhat")
+    fu, r = _col(df, "functional"), _col(df, "rhat")
     eb, et = _col(df, "ess_bulk"), _col(df, "ess_tail")
-    if not _need(df, "agg marginal R-hat/ESS", r, eb, et, _col(df, "sampler")):
+    if not _need(df, "agg marginal R-hat/ESS", fu, r, eb, et, _col(df, "sampler")):
         return
     if "n_chains" in df.columns:
         df = df[df["n_chains"] == 2]
+    df = df[df[fu].astype(str).str.lower() == "mean"]
     df = _samp_ordered(df)
-    agg = (df.groupby("sampler", observed=True)
+    keys = (["k_true"] if has_kt else []) + ["sampler"]
+    agg = (df.groupby(keys, observed=True)
              .agg(rmean=(r, "mean"), rmed=(r, "median"), rmax=(r, "max"),
                   rfrac=(r, lambda x: (x.dropna() <= 1.1).mean()),
                   med_b=(eb, "median"), med_t=(et, "median")).reset_index()
-             .sort_values("sampler", kind="stable"))
+             .sort_values(keys, kind="stable"))
 
-    rows = [f"{r_['sampler']} & {_num(r_['rmean'], 3)} & {_num(r_['rmed'], 3)} & "
-            f"{_num(r_['rmax'], 3)} & {_num(r_['rfrac'], 2)} & "
-            f"{_num(r_['med_b'], 0)} & {_num(r_['med_t'], 0)}"
-            for _, r_ in agg.iterrows()]
-    header = ("Sampler & mean $\\widehat{R}$ & median $\\widehat{R}$ & max $\\widehat{R}$ & "
-              "frac.\\ $\\widehat{R}\\leq1.1$ & median bulk ESS & median tail ESS")
-    _emit(out, "agg_convergence.tex", "l" + "c" * 6, header, rows)
+    def value_fn(r_):
+        return [str(r_["sampler"]), _num(r_["rmean"], 3), _num(r_["rmed"], 3),
+                _num(r_["rmax"], 3), _num(r_["rfrac"], 2),
+                _num(r_["med_b"], 0), _num(r_["med_t"], 0)]
+
+    lead = "$K_{\\text{true}}$ & " if has_kt else ""
+    header = (lead + "Sampler & mean $\\widehat{R}$ & median $\\widehat{R}$ & "
+              "max $\\widehat{R}$ & frac.\\ $\\widehat{R}\\leq1.1$ & "
+              "median bulk ESS & median tail ESS")
+    group_cols = ["k_true"] if has_kt else []
+    group_fmt = [lambda v: str(int(v))] if has_kt else []
+    _emit(out, "agg_convergence.tex", ("c" if has_kt else "") + "l" + "c" * 6, header,
+          _grouped_rows(agg, group_cols, group_fmt, value_fn))
 
 
 def agg_marginal(out: str, root: str, has_kt: bool) -> None:
@@ -786,10 +728,10 @@ def main() -> int:
         marginal_distances(std_out, STD, has_kt=False, grid=grid)
     retained_mass(std_out, STD, has_kt=False)
     kl_inf(std_out, STD, has_kt=False)
-    std_convergence_rhat(std_out)
+    convergence_rhat(std_out, DATA_STD, has_kt=False)
     convergence_ess(std_out, STD, has_kt=False)
     agg_recovery_standard(std_out)
-    agg_convergence_standard(std_out)
+    agg_convergence(std_out, DATA_STD, has_kt=False)
     agg_marginal(std_out, STD, has_kt=False)
 
     print("mixture study -> mixture/")
@@ -800,13 +742,13 @@ def main() -> int:
         marginal_distances(mix_out, MIX, has_kt=True, grid=grid)
     retained_mass(mix_out, MIX, has_kt=True)
     kl_inf(mix_out, MIX, has_kt=True)
-    convergence_rhat(mix_out, MIX, has_kt=True)
+    convergence_rhat(mix_out, DATA_MIX, has_kt=True)
     convergence_ess(mix_out, MIX, has_kt=True)
     component_recovery(mix_out)
     component_confusion(mix_out)
     component_thresholds(mix_out)
     agg_delta_recovery_mix(mix_out)
-    agg_convergence(mix_out, MIX, has_kt=True)
+    agg_convergence(mix_out, DATA_MIX, has_kt=True)
     agg_marginal(mix_out, MIX, has_kt=True)
 
     if _LONGTABLES:

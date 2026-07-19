@@ -1,335 +1,79 @@
-\begin{longtable}{clllcc}
+\begin{longtable}{cllcc}
 \toprule
-$K_{\text{true}}$ & Functional & Coefficient & Sampler & median bulk ESS & median tail ESS \\
+$K_{\text{true}}$ & Coefficient & Sampler & median bulk ESS & median tail ESS \\
 \midrule
 \endfirsthead
 \toprule
-$K_{\text{true}}$ & Functional & Coefficient & Sampler & median bulk ESS & median tail ESS \\
+$K_{\text{true}}$ & Coefficient & Sampler & median bulk ESS & median tail ESS \\
 \midrule
 \endhead
 \midrule
-\multicolumn{6}{r}{\emph{continued on next page}} \\
+\multicolumn{5}{r}{\emph{continued on next page}} \\
 \endfoot
 \bottomrule
 \endlastfoot
-1 & mean & Alt1 & bayesm & 68 & 238 \\
- &  &  & Replication & 82 & 358 \\
- &  &  & NUTS & 184 & 368 \\
- &  &  & HMC & 90 & 140 \\
- &  & Alt2 & bayesm & 67 & 353 \\
- &  &  & Replication & 79 & 332 \\
- &  &  & NUTS & 129 & 393 \\
- &  &  & HMC & 73 & 169 \\
- &  & Alt3 & bayesm & 96 & 274 \\
- &  &  & Replication & 67 & 348 \\
- &  &  & NUTS & 110 & 379 \\
- &  &  & HMC & 78 & 169 \\
- &  & Price & bayesm & 80 & 396 \\
- &  &  & Replication & 103 & 485 \\
- &  &  & NUTS & 124 & 225 \\
- &  &  & HMC & 97 & 155 \\
- & SD & Alt1 & bayesm & 153 & 947 \\
- &  &  & Replication & 189 & 1399 \\
- &  &  & NUTS & 200 & 522 \\
- &  &  & HMC & 44 & 144 \\
- &  & Alt2 & bayesm & 127 & 898 \\
- &  &  & Replication & 96 & 619 \\
- &  &  & NUTS & 111 & 623 \\
- &  &  & HMC & 61 & 202 \\
- &  & Alt3 & bayesm & 197 & 1036 \\
- &  &  & Replication & 166 & 991 \\
- &  &  & NUTS & 149 & 568 \\
- &  &  & HMC & 57 & 244 \\
- &  & Price & bayesm & 176 & 1107 \\
- &  &  & Replication & 230 & 1221 \\
- &  &  & NUTS & 141 & 483 \\
- &  &  & HMC & 102 & 214 \\
- & Q05 & Alt1 & bayesm & 420 & 1019 \\
- &  &  & Replication & 372 & 840 \\
- &  &  & NUTS & 558 & 1459 \\
- &  &  & HMC & 103 & 363 \\
- &  & Alt2 & bayesm & 322 & 793 \\
- &  &  & Replication & 394 & 756 \\
- &  &  & NUTS & 337 & 1153 \\
- &  &  & HMC & 136 & 354 \\
- &  & Alt3 & bayesm & 338 & 777 \\
- &  &  & Replication & 435 & 1062 \\
- &  &  & NUTS & 333 & 914 \\
- &  &  & HMC & 134 & 347 \\
- &  & Price & bayesm & 321 & 719 \\
- &  &  & Replication & 349 & 897 \\
- &  &  & NUTS & 280 & 866 \\
- &  &  & HMC & 146 & 471 \\
- & median & Alt1 & bayesm & 506 & 1620 \\
- &  &  & Replication & 592 & 1732 \\
- &  &  & NUTS & 271 & 749 \\
- &  &  & HMC & 97 & 324 \\
- &  & Alt2 & bayesm & 764 & 2089 \\
- &  &  & Replication & 690 & 2416 \\
- &  &  & NUTS & 347 & 1023 \\
- &  &  & HMC & 128 & 338 \\
- &  & Alt3 & bayesm & 709 & 1814 \\
- &  &  & Replication & 607 & 1996 \\
- &  &  & NUTS & 297 & 1052 \\
- &  &  & HMC & 114 & 365 \\
- &  & Price & bayesm & 784 & 2249 \\
- &  &  & Replication & 816 & 2408 \\
- &  &  & NUTS & 337 & 1028 \\
- &  &  & HMC & 129 & 388 \\
- & Q95 & Alt1 & bayesm & 202 & 451 \\
- &  &  & Replication & 311 & 879 \\
- &  &  & NUTS & 381 & 954 \\
- &  &  & HMC & 106 & 312 \\
- &  & Alt2 & bayesm & 300 & 593 \\
- &  &  & Replication & 317 & 699 \\
- &  &  & NUTS & 277 & 1231 \\
- &  &  & HMC & 92 & 340 \\
- &  & Alt3 & bayesm & 259 & 495 \\
- &  &  & Replication & 274 & 544 \\
- &  &  & NUTS & 355 & 992 \\
- &  &  & HMC & 106 & 286 \\
- &  & Price & bayesm & 539 & 1287 \\
- &  &  & Replication & 458 & 1055 \\
- &  &  & NUTS & 369 & 1310 \\
- &  &  & HMC & 153 & 542 \\
-2 & mean & Alt1 & bayesm & 78 & 244 \\
- &  &  & Replication & 71 & 235 \\
- &  &  & NUTS & 52 & 78 \\
- &  &  & HMC & 52 & 89 \\
- &  & Alt2 & bayesm & 67 & 178 \\
- &  &  & Replication & 58 & 274 \\
- &  &  & NUTS & 32 & 107 \\
- &  &  & HMC & 38 & 91 \\
- &  & Alt3 & bayesm & 63 & 147 \\
- &  &  & Replication & 63 & 235 \\
- &  &  & NUTS & 42 & 77 \\
- &  &  & HMC & 38 & 88 \\
- &  & Price & bayesm & 180 & 917 \\
- &  &  & Replication & 102 & 604 \\
- &  &  & NUTS & 34 & 81 \\
- &  &  & HMC & 34 & 74 \\
- & SD & Alt1 & bayesm & 57 & 373 \\
- &  &  & Replication & 73 & 367 \\
- &  &  & NUTS & 29 & 263 \\
- &  &  & HMC & 47 & 164 \\
- &  & Alt2 & bayesm & 54 & 295 \\
- &  &  & Replication & 77 & 321 \\
- &  &  & NUTS & 41 & 263 \\
- &  &  & HMC & 28 & 226 \\
- &  & Alt3 & bayesm & 49 & 308 \\
- &  &  & Replication & 75 & 415 \\
- &  &  & NUTS & 26 & 259 \\
- &  &  & HMC & 43 & 217 \\
- &  & Price & bayesm & 171 & 1012 \\
- &  &  & Replication & 68 & 683 \\
- &  &  & NUTS & 30 & 188 \\
- &  &  & HMC & 51 & 263 \\
- & Q05 & Alt1 & bayesm & 395 & 987 \\
- &  &  & Replication & 350 & 830 \\
- &  &  & NUTS & 383 & 1347 \\
- &  &  & HMC & 125 & 500 \\
- &  & Alt2 & bayesm & 271 & 559 \\
- &  &  & Replication & 264 & 687 \\
- &  &  & NUTS & 243 & 964 \\
- &  &  & HMC & 95 & 373 \\
- &  & Alt3 & bayesm & 246 & 535 \\
- &  &  & Replication & 212 & 332 \\
- &  &  & NUTS & 226 & 1227 \\
- &  &  & HMC & 125 & 401 \\
- &  & Price & bayesm & 378 & 1071 \\
- &  &  & Replication & 311 & 987 \\
- &  &  & NUTS & 276 & 1148 \\
- &  &  & HMC & 125 & 461 \\
- & median & Alt1 & bayesm & 1475 & 3682 \\
- &  &  & Replication & 1368 & 3486 \\
- &  &  & NUTS & 35 & 253 \\
- &  &  & HMC & 58 & 144 \\
- &  & Alt2 & bayesm & 1463 & 3682 \\
- &  &  & Replication & 1312 & 3628 \\
- &  &  & NUTS & 62 & 216 \\
- &  &  & HMC & 46 & 104 \\
- &  & Alt3 & bayesm & 1578 & 3646 \\
- &  &  & Replication & 1469 & 3594 \\
- &  &  & NUTS & 48 & 151 \\
- &  &  & HMC & 33 & 89 \\
- &  & Price & bayesm & 3934 & 5679 \\
- &  &  & Replication & 3367 & 6693 \\
- &  &  & NUTS & 44 & 62 \\
- &  &  & HMC & 17 & 60 \\
- & Q95 & Alt1 & bayesm & 289 & 750 \\
- &  &  & Replication & 259 & 617 \\
- &  &  & NUTS & 237 & 964 \\
- &  &  & HMC & 77 & 305 \\
- &  & Alt2 & bayesm & 388 & 881 \\
- &  &  & Replication & 330 & 850 \\
- &  &  & NUTS & 254 & 781 \\
- &  &  & HMC & 113 & 469 \\
- &  & Alt3 & bayesm & 333 & 712 \\
- &  &  & Replication & 336 & 692 \\
- &  &  & NUTS & 304 & 1113 \\
- &  &  & HMC & 108 & 347 \\
- &  & Price & bayesm & 326 & 732 \\
- &  &  & Replication & 305 & 960 \\
- &  &  & NUTS & 269 & 1148 \\
- &  &  & HMC & 101 & 335 \\
-3 & mean & Alt1 & bayesm & 70 & 239 \\
- &  &  & Replication & 71 & 227 \\
- &  &  & NUTS & 35 & 79 \\
- &  &  & HMC & 34 & 74 \\
- &  & Alt2 & bayesm & 74 & 215 \\
- &  &  & Replication & 63 & 199 \\
- &  &  & NUTS & 35 & 87 \\
- &  &  & HMC & 28 & 80 \\
- &  & Alt3 & bayesm & 66 & 219 \\
- &  &  & Replication & 54 & 172 \\
- &  &  & NUTS & 34 & 69 \\
- &  &  & HMC & 43 & 91 \\
- &  & Price & bayesm & 216 & 1513 \\
- &  &  & Replication & 232 & 1607 \\
- &  &  & NUTS & 45 & 83 \\
- &  &  & HMC & 78 & 130 \\
- & SD & Alt1 & bayesm & 52 & 200 \\
- &  &  & Replication & 48 & 188 \\
- &  &  & NUTS & 40 & 212 \\
- &  &  & HMC & 25 & 83 \\
- &  & Alt2 & bayesm & 64 & 286 \\
- &  &  & Replication & 42 & 179 \\
- &  &  & NUTS & 38 & 269 \\
- &  &  & HMC & 51 & 176 \\
- &  & Alt3 & bayesm & 44 & 202 \\
- &  &  & Replication & 54 & 189 \\
- &  &  & NUTS & 35 & 163 \\
- &  &  & HMC & 28 & 127 \\
- &  & Price & bayesm & 93 & 693 \\
- &  &  & Replication & 91 & 678 \\
- &  &  & NUTS & 75 & 365 \\
- &  &  & HMC & 58 & 165 \\
- & Q05 & Alt1 & bayesm & 313 & 736 \\
- &  &  & Replication & 275 & 506 \\
- &  &  & NUTS & 287 & 1026 \\
- &  &  & HMC & 100 & 341 \\
- &  & Alt2 & bayesm & 265 & 630 \\
- &  &  & Replication & 270 & 517 \\
- &  &  & NUTS & 285 & 1034 \\
- &  &  & HMC & 81 & 236 \\
- &  & Alt3 & bayesm & 233 & 501 \\
- &  &  & Replication & 241 & 457 \\
- &  &  & NUTS & 205 & 560 \\
- &  &  & HMC & 88 & 264 \\
- &  & Price & bayesm & 291 & 857 \\
- &  &  & Replication & 318 & 826 \\
- &  &  & NUTS & 234 & 1025 \\
- &  &  & HMC & 136 & 461 \\
- & median & Alt1 & bayesm & 1412 & 4782 \\
- &  &  & Replication & 1413 & 4647 \\
- &  &  & NUTS & 198 & 402 \\
- &  &  & HMC & 50 & 188 \\
- &  & Alt2 & bayesm & 1391 & 4568 \\
- &  &  & Replication & 1301 & 3664 \\
- &  &  & NUTS & 201 & 487 \\
- &  &  & HMC & 51 & 221 \\
- &  & Alt3 & bayesm & 1178 & 3696 \\
- &  &  & Replication & 1267 & 4421 \\
- &  &  & NUTS & 144 & 316 \\
- &  &  & HMC & 70 & 160 \\
- &  & Price & bayesm & 2144 & 6504 \\
- &  &  & Replication & 2032 & 6272 \\
- &  &  & NUTS & 156 & 259 \\
- &  &  & HMC & 62 & 168 \\
- & Q95 & Alt1 & bayesm & 239 & 591 \\
- &  &  & Replication & 212 & 428 \\
- &  &  & NUTS & 195 & 591 \\
- &  &  & HMC & 76 & 266 \\
- &  & Alt2 & bayesm & 283 & 609 \\
- &  &  & Replication & 335 & 757 \\
- &  &  & NUTS & 304 & 942 \\
- &  &  & HMC & 98 & 305 \\
- &  & Alt3 & bayesm & 316 & 724 \\
- &  &  & Replication & 305 & 615 \\
- &  &  & NUTS & 327 & 935 \\
- &  &  & HMC & 110 & 288 \\
- &  & Price & bayesm & 334 & 786 \\
- &  &  & Replication & 299 & 772 \\
- &  &  & NUTS & 217 & 885 \\
- &  &  & HMC & 110 & 328 \\
-5 & mean & Alt1 & bayesm & 224 & 670 \\
- &  &  & Replication & 327 & 1158 \\
- &  &  & NUTS & 121 & 251 \\
- &  &  & HMC & 37 & 128 \\
- &  & Alt2 & bayesm & 257 & 672 \\
- &  &  & Replication & 232 & 796 \\
- &  &  & NUTS & 132 & 256 \\
- &  &  & HMC & 41 & 109 \\
- &  & Alt3 & bayesm & 187 & 563 \\
- &  &  & Replication & 177 & 985 \\
- &  &  & NUTS & 107 & 289 \\
- &  &  & HMC & 40 & 119 \\
- &  & Price & bayesm & 691 & 2915 \\
- &  &  & Replication & 653 & 3191 \\
- &  &  & NUTS & 483 & 2348 \\
- &  &  & HMC & 87 & 255 \\
- & SD & Alt1 & bayesm & 94 & 169 \\
- &  &  & Replication & 115 & 208 \\
- &  &  & NUTS & 44 & 127 \\
- &  &  & HMC & 24 & 63 \\
- &  & Alt2 & bayesm & 100 & 180 \\
- &  &  & Replication & 116 & 273 \\
- &  &  & NUTS & 37 & 148 \\
- &  &  & HMC & 18 & 68 \\
- &  & Alt3 & bayesm & 87 & 158 \\
- &  &  & Replication & 97 & 251 \\
- &  &  & NUTS & 53 & 208 \\
- &  &  & HMC & 27 & 82 \\
- &  & Price & bayesm & 200 & 558 \\
- &  &  & Replication & 234 & 583 \\
- &  &  & NUTS & 246 & 395 \\
- &  &  & HMC & 49 & 95 \\
- & Q05 & Alt1 & bayesm & 293 & 661 \\
- &  &  & Replication & 293 & 700 \\
- &  &  & NUTS & 259 & 674 \\
- &  &  & HMC & 27 & 160 \\
- &  & Alt2 & bayesm & 329 & 711 \\
- &  &  & Replication & 304 & 808 \\
- &  &  & NUTS & 268 & 678 \\
- &  &  & HMC & 62 & 218 \\
- &  & Alt3 & bayesm & 182 & 424 \\
- &  &  & Replication & 189 & 372 \\
- &  &  & NUTS & 201 & 563 \\
- &  &  & HMC & 53 & 177 \\
- &  & Price & bayesm & 347 & 963 \\
- &  &  & Replication & 340 & 1048 \\
- &  &  & NUTS & 401 & 1274 \\
- &  &  & HMC & 79 & 357 \\
- & median & Alt1 & bayesm & 1257 & 4389 \\
- &  &  & Replication & 1504 & 4341 \\
- &  &  & NUTS & 724 & 2409 \\
- &  &  & HMC & 65 & 183 \\
- &  & Alt2 & bayesm & 1697 & 4976 \\
- &  &  & Replication & 1314 & 4860 \\
- &  &  & NUTS & 522 & 1986 \\
- &  &  & HMC & 81 & 240 \\
- &  & Alt3 & bayesm & 1120 & 3734 \\
- &  &  & Replication & 892 & 3903 \\
- &  &  & NUTS & 465 & 1493 \\
- &  &  & HMC & 87 & 241 \\
- &  & Price & bayesm & 1844 & 7075 \\
- &  &  & Replication & 2133 & 7543 \\
- &  &  & NUTS & 1355 & 4555 \\
- &  &  & HMC & 108 & 168 \\
- & Q95 & Alt1 & bayesm & 245 & 589 \\
- &  &  & Replication & 260 & 619 \\
- &  &  & NUTS & 264 & 828 \\
- &  &  & HMC & 68 & 205 \\
- &  & Alt2 & bayesm & 272 & 676 \\
- &  &  & Replication & 273 & 703 \\
- &  &  & NUTS & 349 & 813 \\
- &  &  & HMC & 86 & 252 \\
- &  & Alt3 & bayesm & 345 & 828 \\
- &  &  & Replication & 374 & 845 \\
- &  &  & NUTS & 302 & 998 \\
- &  &  & HMC & 74 & 266 \\
- &  & Price & bayesm & 288 & 668 \\
- &  &  & Replication & 301 & 857 \\
- &  &  & NUTS & 513 & 1544 \\
- &  &  & HMC & 66 & 269 \\
+1 & Alt1 & bayesm & 68 & 238 \\
+ &  & Replication & 82 & 358 \\
+ &  & NUTS & 184 & 368 \\
+ &  & HMC & 90 & 140 \\
+ & Alt2 & bayesm & 67 & 353 \\
+ &  & Replication & 79 & 332 \\
+ &  & NUTS & 129 & 393 \\
+ &  & HMC & 73 & 169 \\
+ & Alt3 & bayesm & 96 & 274 \\
+ &  & Replication & 67 & 348 \\
+ &  & NUTS & 110 & 379 \\
+ &  & HMC & 78 & 169 \\
+ & Price & bayesm & 80 & 396 \\
+ &  & Replication & 103 & 485 \\
+ &  & NUTS & 124 & 225 \\
+ &  & HMC & 97 & 155 \\
+2 & Alt1 & bayesm & 78 & 244 \\
+ &  & Replication & 71 & 235 \\
+ &  & NUTS & 52 & 78 \\
+ &  & HMC & 52 & 89 \\
+ & Alt2 & bayesm & 67 & 178 \\
+ &  & Replication & 58 & 274 \\
+ &  & NUTS & 32 & 107 \\
+ &  & HMC & 38 & 91 \\
+ & Alt3 & bayesm & 63 & 147 \\
+ &  & Replication & 63 & 235 \\
+ &  & NUTS & 42 & 77 \\
+ &  & HMC & 38 & 88 \\
+ & Price & bayesm & 180 & 917 \\
+ &  & Replication & 102 & 604 \\
+ &  & NUTS & 34 & 81 \\
+ &  & HMC & 34 & 74 \\
+3 & Alt1 & bayesm & 70 & 239 \\
+ &  & Replication & 71 & 227 \\
+ &  & NUTS & 35 & 79 \\
+ &  & HMC & 34 & 74 \\
+ & Alt2 & bayesm & 74 & 215 \\
+ &  & Replication & 63 & 199 \\
+ &  & NUTS & 35 & 87 \\
+ &  & HMC & 28 & 80 \\
+ & Alt3 & bayesm & 66 & 219 \\
+ &  & Replication & 54 & 172 \\
+ &  & NUTS & 34 & 69 \\
+ &  & HMC & 43 & 91 \\
+ & Price & bayesm & 216 & 1513 \\
+ &  & Replication & 232 & 1607 \\
+ &  & NUTS & 45 & 83 \\
+ &  & HMC & 78 & 130 \\
+5 & Alt1 & bayesm & 224 & 670 \\
+ &  & Replication & 327 & 1158 \\
+ &  & NUTS & 121 & 251 \\
+ &  & HMC & 37 & 128 \\
+ & Alt2 & bayesm & 257 & 672 \\
+ &  & Replication & 232 & 796 \\
+ &  & NUTS & 132 & 256 \\
+ &  & HMC & 41 & 109 \\
+ & Alt3 & bayesm & 187 & 563 \\
+ &  & Replication & 177 & 985 \\
+ &  & NUTS & 107 & 289 \\
+ &  & HMC & 40 & 119 \\
+ & Price & bayesm & 691 & 2915 \\
+ &  & Replication & 653 & 3191 \\
+ &  & NUTS & 483 & 2348 \\
+ &  & HMC & 87 & 255 \\
 \end{longtable}
