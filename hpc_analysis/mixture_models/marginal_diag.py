@@ -38,7 +38,7 @@ import pandas as pd
 from plotnine import (
     aes,
     element_text,
-    facet_grid,
+    facet_wrap,
     geom_boxplot,
     geom_hline,
     ggplot,
@@ -117,11 +117,13 @@ def _prep(d: pd.DataFrame) -> tuple[pd.DataFrame, list]:
 
 
 # --------------------------------------------------------------------------------- #
-# Plots: x = k_true, dodged box per sampler, facet_grid(functional x param).
+# Plots: x = k_true, dodged box per sampler, MEAN functional only (Liesel-summary
+# style - the location chain of each coefficient's marginal), 1x4 param facets.
 # --------------------------------------------------------------------------------- #
 def _diag_grid(d: pd.DataFrame, metric: str, n_chains: int) -> ggplot:
     ylab, logscale, hline, mtitle = METRIC_CFG[metric]
     d = d.dropna(subset=[metric])
+    d = d[d["functional"] == "mean"]   # mean functional only, matching the tex tables
     d, sampler_order = _prep(d)
     counts = d.groupby(["k_true", "sampler"], observed=True)["data_seed"].nunique().to_dict()
     print(f"[marginal_diag:{metric}] c{n_chains}: seeds/box={counts}")
@@ -137,29 +139,29 @@ def _diag_grid(d: pd.DataFrame, metric: str, n_chains: int) -> ggplot:
     if hline is not None:
         p = p + geom_hline(yintercept=hline, linetype="dashed", color="#555555", size=0.7)
     return (
-        p + facet_grid(rows="functional", cols="param", scales="free_y", labeller="label_value")
+        p + facet_wrap("param", ncol=4, scales="free_y", labeller="label_value")
         + scale_color_manual(values=color_vals,
                              labels=[SAMPLER_LABELS.get(s, s) for s in sampler_order])
         + labs(x="k_true", y=ylab, color="Sampler",
-               title=f"Marginal {mtitle} vs k_true")
+               title=f"{mtitle} of the Marginal Mean vs k_true")
         + theme_bw()
-        + theme(figure_size=(13, 11), axis_text_x=element_text(size=8),
+        + theme(figure_size=(12, 4.5), axis_text_x=element_text(size=8),
                 plot_title=element_text(size=11))
     )
 
 
 def plot_rhat_grid(n_chains: int = 2, df: Optional[pd.DataFrame] = None) -> ggplot:
-    """R-hat of every marginal functional (mean/sd/q05/q50/q95) x 4 params, by k_true."""
+    """R-hat of the marginal mean (location chain) x 4 params, by k_true."""
     return _diag_grid(load_diag(n_chains, df=df), "Rhat", n_chains)
 
 
 def plot_ess_bulk_grid(n_chains: int = 2, df: Optional[pd.DataFrame] = None) -> ggplot:
-    """Bulk ESS (log scale) of every marginal functional x 4 params, by k_true."""
+    """Bulk ESS (log scale) of the marginal mean x 4 params, by k_true."""
     return _diag_grid(load_diag(n_chains, df=df), "ESS_bulk", n_chains)
 
 
 def plot_ess_tail_grid(n_chains: int = 2, df: Optional[pd.DataFrame] = None) -> ggplot:
-    """Tail ESS (log scale) of every marginal functional x 4 params, by k_true."""
+    """Tail ESS (log scale) of the marginal mean x 4 params, by k_true."""
     return _diag_grid(load_diag(n_chains, df=df), "ESS_tail", n_chains)
 
 
