@@ -417,26 +417,29 @@ def convergence_rhat(out: str, data_root: str, has_kt: bool) -> None:
     if df is None:
         return
     f, p, r = _col(df, "functional"), _col(df, "param"), _col(df, "rhat")
-    if not _need(df, "marginal R-hat", f, p, r, _col(df, "sampler")):
+    eb, et = _col(df, "ess_bulk"), _col(df, "ess_tail")
+    if not _need(df, "marginal R-hat", f, p, r, eb, et, _col(df, "sampler")):
         return
     if "n_chains" in df.columns:
         df = df[df["n_chains"] == 2]
     df = df[df[f].astype(str).str.lower() == "mean"].dropna(subset=[r])
     df = _samp_ordered(df)
     keys = (["k_true"] if has_kt else []) + [p, "sampler"]
-    agg = (df.groupby(keys, observed=True)[r]
-             .agg(rmed="median", rfrac=lambda x: (x <= 1.1).mean()).reset_index()
+    agg = (df.groupby(keys, observed=True)
+             .agg(rmed=(r, "median"), rfrac=(r, lambda x: (x <= 1.1).mean()),
+                  med_b=(eb, "median"), med_t=(et, "median")).reset_index()
              .sort_values(keys, kind="stable"))
 
     def value_fn(r_):
-        return [str(r_["sampler"]), _num(r_["rmed"], 3), _num(r_["rfrac"], 2)]
+        return [str(r_["sampler"]), _num(r_["rmed"], 3), _num(r_["rfrac"], 2),
+                _num(r_["med_b"], 0), _num(r_["med_t"], 0)]
 
     lead = "$K_{\\text{true}}$ & " if has_kt else ""
     header = (lead + "Coefficient & Sampler & median $\\widehat{R}$ & "
-              "frac.\\ $\\widehat{R}\\leq1.1$")
+              "frac.\\ $\\widehat{R}\\leq1.1$ & median ESS (bulk) & median ESS (tail)")
     group_cols = (["k_true"] if has_kt else []) + [p]
     group_fmt = ([lambda v: str(int(v))] if has_kt else []) + [_tex_escape]
-    colspec = ("c" if has_kt else "") + "ll" + "cc"
+    colspec = ("c" if has_kt else "") + "ll" + "cccc"
     _emit(out, "convergence_rhat.tex", colspec, header,
           _grouped_rows(agg, group_cols, group_fmt, value_fn))
 
