@@ -367,23 +367,43 @@ def kl_inf(out: str, root: str, has_kt: bool) -> None:
         frames.append(df)
     df = pd.concat(frames, ignore_index=True)
     p = _col(df, "param")
-    ni, nt, ir = _col(df, "n_inf"), _col(df, "n_total"), _col(df, "inf_rate")
-    if not _need(df, "KL-inf", p, _col(df, "sampler"), ni, nt, ir):
+    ni = _col(df, "n_inf")
+    if not _need(df, "KL-inf", p, _col(df, "sampler"), ni):
         return
     df = _samp_ordered(df)
     df["grid"] = pd.Categorical(df["grid"], categories=["full", "trimmed"], ordered=True)
-    sort_cols = (["k_true"] if has_kt else []) + ["grid", p, "sampler"]
-    df = df.sort_values(sort_cols, kind="stable")
-    group_cols = (["k_true"] if has_kt else []) + ["grid", p]
-    group_fmt = ([lambda v: str(int(v))] if has_kt else []) + [str, _tex_escape]
+
+    if not has_kt:
+        nt, ir = _col(df, "n_total"), _col(df, "inf_rate")
+        if not _need(df, "KL-inf", nt, ir):
+            return
+        df = df.sort_values(["grid", p, "sampler"], kind="stable")
+
+        def value_fn(r):
+            return [str(r["sampler"]), str(int(r[ni])), str(int(r[nt])), _num(r[ir], 3)]
+
+        header = "Grid & Coefficient & Sampler & $n_\\infty$ & $n$ & rate"
+        _emit(out, "kl_inf.tex", "lll" + "ccc", header,
+              _grouped_rows(df, ["grid", p], [str, _tex_escape], value_fn))
+        return
+
+    # One column per k_true instead of repeating grid/coefficient rows per k_true - only
+    # n_inf is informative here (n is constant, rate is n_inf/n), so a wide layout beats
+    # the long one. frac_correct/rate can still be read off n_inf/100 if ever needed.
+    kts = sorted(df["k_true"].unique())
+    wide = df.pivot(index=["grid", p, "sampler"], columns="k_true", values=ni).reset_index()
+    wide["grid"] = pd.Categorical(wide["grid"], categories=["full", "trimmed"], ordered=True)
+    wide["sampler"] = pd.Categorical(wide["sampler"], categories=SAMP_CAT, ordered=True)
+    wide = wide.sort_values(["grid", p, "sampler"], kind="stable")
 
     def value_fn(r):
-        return [str(r["sampler"]), str(int(r[ni])), str(int(r[nt])), _num(r[ir], 3)]
+        return [str(r["sampler"])] + [str(int(r[k])) for k in kts]
 
-    lead = ("$K_{\\text{true}}$ & " if has_kt else "")
-    header = lead + "Grid & Coefficient & Sampler & $n_\\infty$ & $n$ & rate"
-    colspec = ("c" if has_kt else "") + "lll" + "ccc"
-    _emit(out, "kl_inf.tex", colspec, header, _grouped_rows(df, group_cols, group_fmt, value_fn))
+    header = ("Grid & Coefficient & Sampler & "
+              + " & ".join(f"$K_{{\\text{{true}}}}{{=}}{k}$" for k in kts))
+    colspec = "ll" + "l" + "c" * len(kts)
+    _emit(out, "kl_inf.tex", colspec, header,
+          _grouped_rows(wide, ["grid", p], [str, _tex_escape], value_fn))
 
 
 # ----------------------------------------------------------------------
@@ -405,20 +425,18 @@ def convergence_rhat(out: str, data_root: str, has_kt: bool) -> None:
     df = _samp_ordered(df)
     keys = (["k_true"] if has_kt else []) + [p, "sampler"]
     agg = (df.groupby(keys, observed=True)[r]
-             .agg(rmean="mean", rmed="median", rmax="max",
-                  rfrac=lambda x: (x <= 1.1).mean()).reset_index()
+             .agg(rmed="median", rfrac=lambda x: (x <= 1.1).mean()).reset_index()
              .sort_values(keys, kind="stable"))
 
     def value_fn(r_):
-        return [str(r_["sampler"]), _num(r_["rmean"], 3), _num(r_["rmed"], 3),
-                _num(r_["rmax"], 3), _num(r_["rfrac"], 2)]
+        return [str(r_["sampler"]), _num(r_["rmed"], 3), _num(r_["rfrac"], 2)]
 
     lead = "$K_{\\text{true}}$ & " if has_kt else ""
-    header = (lead + "Coefficient & Sampler & mean $\\widehat{R}$ & median $\\widehat{R}$ & "
-              "max $\\widehat{R}$ & frac.\\ $\\widehat{R}\\leq1.1$")
+    header = (lead + "Coefficient & Sampler & median $\\widehat{R}$ & "
+              "frac.\\ $\\widehat{R}\\leq1.1$")
     group_cols = (["k_true"] if has_kt else []) + [p]
     group_fmt = ([lambda v: str(int(v))] if has_kt else []) + [_tex_escape]
-    colspec = ("c" if has_kt else "") + "ll" + "cccc"
+    colspec = ("c" if has_kt else "") + "ll" + "cc"
     _emit(out, "convergence_rhat.tex", colspec, header,
           _grouped_rows(agg, group_cols, group_fmt, value_fn))
 

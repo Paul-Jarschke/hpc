@@ -1,143 +1,38 @@
-\begin{longtable}{clllccc}
+\begin{tabular}{lllcccc}
 \toprule
-$K_{\text{true}}$ & Grid & Coefficient & Sampler & $n_\infty$ & $n$ & rate \\
+Grid & Coefficient & Sampler & $K_{\text{true}}{=}1$ & $K_{\text{true}}{=}2$ & $K_{\text{true}}{=}3$ & $K_{\text{true}}{=}5$ \\
 \midrule
-\endfirsthead
-\toprule
-$K_{\text{true}}$ & Grid & Coefficient & Sampler & $n_\infty$ & $n$ & rate \\
-\midrule
-\endhead
-\midrule
-\multicolumn{7}{r}{\emph{continued on next page}} \\
-\endfoot
+full & Alt1 & bayesm & 93 & 96 & 100 & 86 \\
+ &  & Replication & 91 & 97 & 94 & 79 \\
+ &  & NUTS & 20 & 40 & 35 & 61 \\
+ &  & HMC & 54 & 53 & 48 & 67 \\
+ & Alt2 & bayesm & 93 & 97 & 98 & 85 \\
+ &  & Replication & 95 & 96 & 100 & 79 \\
+ &  & NUTS & 46 & 64 & 70 & 68 \\
+ &  & HMC & 69 & 72 & 83 & 89 \\
+ & Alt3 & bayesm & 92 & 99 & 97 & 85 \\
+ &  & Replication & 100 & 100 & 100 & 82 \\
+ &  & NUTS & 67 & 82 & 85 & 78 \\
+ &  & HMC & 90 & 86 & 96 & 94 \\
+ & Price & bayesm & 90 & 94 & 98 & 84 \\
+ &  & Replication & 93 & 97 & 100 & 78 \\
+ &  & NUTS & 86 & 88 & 98 & 81 \\
+ &  & HMC & 96 & 97 & 99 & 96 \\
+trimmed & Alt1 & bayesm & 0 & 2 & 0 & 0 \\
+ &  & Replication & 0 & 3 & 0 & 0 \\
+ &  & NUTS & 38 & 17 & 17 & 12 \\
+ &  & HMC & 20 & 6 & 8 & 6 \\
+ & Alt2 & bayesm & 0 & 0 & 0 & 0 \\
+ &  & Replication & 0 & 0 & 0 & 0 \\
+ &  & NUTS & 12 & 6 & 10 & 4 \\
+ &  & HMC & 4 & 1 & 1 & 2 \\
+ & Alt3 & bayesm & 0 & 0 & 0 & 0 \\
+ &  & Replication & 0 & 0 & 1 & 1 \\
+ &  & NUTS & 0 & 4 & 5 & 5 \\
+ &  & HMC & 0 & 1 & 2 & 2 \\
+ & Price & bayesm & 0 & 1 & 0 & 0 \\
+ &  & Replication & 0 & 1 & 0 & 0 \\
+ &  & NUTS & 1 & 1 & 0 & 0 \\
+ &  & HMC & 1 & 1 & 0 & 0 \\
 \bottomrule
-\endlastfoot
-1 & full & Alt1 & bayesm & 93 & 100 & 0.930 \\
- &  &  & Replication & 91 & 100 & 0.910 \\
- &  &  & NUTS & 20 & 100 & 0.200 \\
- &  &  & HMC & 54 & 100 & 0.540 \\
- &  & Alt2 & bayesm & 93 & 100 & 0.930 \\
- &  &  & Replication & 95 & 100 & 0.950 \\
- &  &  & NUTS & 46 & 100 & 0.460 \\
- &  &  & HMC & 69 & 100 & 0.690 \\
- &  & Alt3 & bayesm & 92 & 100 & 0.920 \\
- &  &  & Replication & 100 & 100 & 1.000 \\
- &  &  & NUTS & 67 & 100 & 0.670 \\
- &  &  & HMC & 90 & 100 & 0.900 \\
- &  & Price & bayesm & 90 & 100 & 0.900 \\
- &  &  & Replication & 93 & 100 & 0.930 \\
- &  &  & NUTS & 86 & 100 & 0.860 \\
- &  &  & HMC & 96 & 100 & 0.960 \\
- & trimmed & Alt1 & bayesm & 0 & 100 & 0.000 \\
- &  &  & Replication & 0 & 100 & 0.000 \\
- &  &  & NUTS & 38 & 100 & 0.380 \\
- &  &  & HMC & 20 & 100 & 0.200 \\
- &  & Alt2 & bayesm & 0 & 100 & 0.000 \\
- &  &  & Replication & 0 & 100 & 0.000 \\
- &  &  & NUTS & 12 & 100 & 0.120 \\
- &  &  & HMC & 4 & 100 & 0.040 \\
- &  & Alt3 & bayesm & 0 & 100 & 0.000 \\
- &  &  & Replication & 0 & 100 & 0.000 \\
- &  &  & NUTS & 0 & 100 & 0.000 \\
- &  &  & HMC & 0 & 100 & 0.000 \\
- &  & Price & bayesm & 0 & 100 & 0.000 \\
- &  &  & Replication & 0 & 100 & 0.000 \\
- &  &  & NUTS & 1 & 100 & 0.010 \\
- &  &  & HMC & 1 & 100 & 0.010 \\
-2 & full & Alt1 & bayesm & 96 & 100 & 0.960 \\
- &  &  & Replication & 97 & 100 & 0.970 \\
- &  &  & NUTS & 40 & 100 & 0.400 \\
- &  &  & HMC & 53 & 100 & 0.530 \\
- &  & Alt2 & bayesm & 97 & 100 & 0.970 \\
- &  &  & Replication & 96 & 100 & 0.960 \\
- &  &  & NUTS & 64 & 100 & 0.640 \\
- &  &  & HMC & 72 & 100 & 0.720 \\
- &  & Alt3 & bayesm & 99 & 100 & 0.990 \\
- &  &  & Replication & 100 & 100 & 1.000 \\
- &  &  & NUTS & 82 & 100 & 0.820 \\
- &  &  & HMC & 86 & 100 & 0.860 \\
- &  & Price & bayesm & 94 & 100 & 0.940 \\
- &  &  & Replication & 97 & 100 & 0.970 \\
- &  &  & NUTS & 88 & 100 & 0.880 \\
- &  &  & HMC & 97 & 100 & 0.970 \\
- & trimmed & Alt1 & bayesm & 2 & 100 & 0.020 \\
- &  &  & Replication & 3 & 100 & 0.030 \\
- &  &  & NUTS & 17 & 100 & 0.170 \\
- &  &  & HMC & 6 & 100 & 0.060 \\
- &  & Alt2 & bayesm & 0 & 100 & 0.000 \\
- &  &  & Replication & 0 & 100 & 0.000 \\
- &  &  & NUTS & 6 & 100 & 0.060 \\
- &  &  & HMC & 1 & 100 & 0.010 \\
- &  & Alt3 & bayesm & 0 & 100 & 0.000 \\
- &  &  & Replication & 0 & 100 & 0.000 \\
- &  &  & NUTS & 4 & 100 & 0.040 \\
- &  &  & HMC & 1 & 100 & 0.010 \\
- &  & Price & bayesm & 1 & 100 & 0.010 \\
- &  &  & Replication & 1 & 100 & 0.010 \\
- &  &  & NUTS & 1 & 100 & 0.010 \\
- &  &  & HMC & 1 & 100 & 0.010 \\
-3 & full & Alt1 & bayesm & 100 & 100 & 1.000 \\
- &  &  & Replication & 94 & 100 & 0.940 \\
- &  &  & NUTS & 35 & 100 & 0.350 \\
- &  &  & HMC & 48 & 100 & 0.480 \\
- &  & Alt2 & bayesm & 98 & 100 & 0.980 \\
- &  &  & Replication & 100 & 100 & 1.000 \\
- &  &  & NUTS & 70 & 100 & 0.700 \\
- &  &  & HMC & 83 & 100 & 0.830 \\
- &  & Alt3 & bayesm & 97 & 100 & 0.970 \\
- &  &  & Replication & 100 & 100 & 1.000 \\
- &  &  & NUTS & 85 & 100 & 0.850 \\
- &  &  & HMC & 96 & 100 & 0.960 \\
- &  & Price & bayesm & 98 & 100 & 0.980 \\
- &  &  & Replication & 100 & 100 & 1.000 \\
- &  &  & NUTS & 98 & 100 & 0.980 \\
- &  &  & HMC & 99 & 100 & 0.990 \\
- & trimmed & Alt1 & bayesm & 0 & 100 & 0.000 \\
- &  &  & Replication & 0 & 100 & 0.000 \\
- &  &  & NUTS & 17 & 100 & 0.170 \\
- &  &  & HMC & 8 & 100 & 0.080 \\
- &  & Alt2 & bayesm & 0 & 100 & 0.000 \\
- &  &  & Replication & 0 & 100 & 0.000 \\
- &  &  & NUTS & 10 & 100 & 0.100 \\
- &  &  & HMC & 1 & 100 & 0.010 \\
- &  & Alt3 & bayesm & 0 & 100 & 0.000 \\
- &  &  & Replication & 1 & 100 & 0.010 \\
- &  &  & NUTS & 5 & 100 & 0.050 \\
- &  &  & HMC & 2 & 100 & 0.020 \\
- &  & Price & bayesm & 0 & 100 & 0.000 \\
- &  &  & Replication & 0 & 100 & 0.000 \\
- &  &  & NUTS & 0 & 100 & 0.000 \\
- &  &  & HMC & 0 & 100 & 0.000 \\
-5 & full & Alt1 & bayesm & 86 & 100 & 0.860 \\
- &  &  & Replication & 79 & 100 & 0.790 \\
- &  &  & NUTS & 61 & 100 & 0.610 \\
- &  &  & HMC & 67 & 100 & 0.670 \\
- &  & Alt2 & bayesm & 85 & 100 & 0.850 \\
- &  &  & Replication & 79 & 100 & 0.790 \\
- &  &  & NUTS & 68 & 100 & 0.680 \\
- &  &  & HMC & 89 & 100 & 0.890 \\
- &  & Alt3 & bayesm & 85 & 100 & 0.850 \\
- &  &  & Replication & 82 & 100 & 0.820 \\
- &  &  & NUTS & 78 & 100 & 0.780 \\
- &  &  & HMC & 94 & 100 & 0.940 \\
- &  & Price & bayesm & 84 & 100 & 0.840 \\
- &  &  & Replication & 78 & 100 & 0.780 \\
- &  &  & NUTS & 81 & 100 & 0.810 \\
- &  &  & HMC & 96 & 100 & 0.960 \\
- & trimmed & Alt1 & bayesm & 0 & 100 & 0.000 \\
- &  &  & Replication & 0 & 100 & 0.000 \\
- &  &  & NUTS & 12 & 100 & 0.120 \\
- &  &  & HMC & 6 & 100 & 0.060 \\
- &  & Alt2 & bayesm & 0 & 100 & 0.000 \\
- &  &  & Replication & 0 & 100 & 0.000 \\
- &  &  & NUTS & 4 & 100 & 0.040 \\
- &  &  & HMC & 2 & 100 & 0.020 \\
- &  & Alt3 & bayesm & 0 & 100 & 0.000 \\
- &  &  & Replication & 1 & 100 & 0.010 \\
- &  &  & NUTS & 5 & 100 & 0.050 \\
- &  &  & HMC & 2 & 100 & 0.020 \\
- &  & Price & bayesm & 0 & 100 & 0.000 \\
- &  &  & Replication & 0 & 100 & 0.000 \\
- &  &  & NUTS & 0 & 100 & 0.000 \\
- &  &  & HMC & 0 & 100 & 0.000 \\
-\end{longtable}
+\end{tabular}
