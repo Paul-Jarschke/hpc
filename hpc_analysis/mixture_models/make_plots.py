@@ -1,14 +1,8 @@
-"""
-Regenerate the full mixture_c2 figure set from data/out/mixture_c2/*.csv.
-
-Run after scripts/gather_summaries.py whenever new runs are gathered. Writes PNGs to
-hpc_analysis/mixture_models/out/{delta,runtime,marginal_comparison,components}/. All figures cover
-the 2-chain (c2) jobs 100-103 with the four samplers bayesm / bayesm_gibbs / nuts / hmc.
-Marginal-distance figures are produced once per evaluation grid ('full' and 'chebyshev';
-filename suffix _<grid>).
-
-    .venv/Scripts/python.exe hpc_analysis/make_plots.py
-"""
+# Regenerate the full mixture_c2 figure set (jobs 100-103, 4 samplers)
+# from data/out/mixture_c2/*.csv. Run after scripts/gather_summaries.py.
+# PNGs -> hpc_analysis/mixture_models/out/; marginal figures once per
+# eval grid (full/ and trimmed/ subfolders).
+# run: .venv/Scripts/python.exe hpc_analysis/mixture_models/make_plots.py
 
 import sys
 from pathlib import Path

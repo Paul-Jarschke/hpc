@@ -1,26 +1,8 @@
-"""
-Reusable parameter-recovery plotting for the mixture_c2 sampler comparison (jobs 100-103).
-
-The post-processing (hpc_analysis/post_process.py) writes tidy per-element recovery
-tables to data/out/mixture_c2/{delta,mu,sigma,beta}_recovery.csv. Every row is
-ONE estimated element of ONE run, carrying all condition columns
-(sampler, n_chains, scenario, k_true, k_model, data_seed, param, ...).
-
-This module exposes ONE general boxplot core, `recovery_boxplot`, that draws a
-boxplot of any chosen value column grouped on an x-axis (default: sampler), with
-optional faceting and row filtering. The two plots the user asked for (signed bias
-and posterior SD of the Delta = Z-covariate estimates, n_chains==1, samplers
-bayesm/nuts/hmc) are each a single call; the many future variants (mu/sigma/beta,
-other value columns, faceting by scenario or param, etc.) are also one call each.
-
-plotnine is used deliberately (see module-level note in the docstring of
-`recovery_boxplot`): the study already uses plotnine, and its grammar-of-graphics
-API gives a single faceting/aesthetic vocabulary that scales to "much more of those
-kinds of plots" without bespoke matplotlib axis wiring per plot.
-
-Run from the repo root with the project venv:
-    .venv/Scripts/python.exe hpc_analysis/plot_recovery.py
-"""
+# Recovery boxplots for the mixture_c2 sampler comparison (jobs 100-103).
+# Reads the tidy per-element tables in data/out/mixture_c2/*.csv
+# (one row = one estimated element of one run, all condition cols).
+# recovery_boxplot is the one general core; named plots are single calls.
+# run: .venv/Scripts/python.exe hpc_analysis/mixture_models/plot_recovery.py
 from __future__ import annotations
 
 from pathlib import Path
@@ -80,12 +62,8 @@ _PARAM_ORDER = ["Alt1", "Alt2", "Alt3", "Price"]
 _SUBSCRIPTS = str.maketrans("0123456789", "₀₁₂₃₄₅₆₇₈₉")
 
 
+# 1-based (demo,param) position in the D x P matrix; '?' if name unknown
 def delta_element_label(demo: str, param: str) -> str:
-    """Return 'Δ₁,₁ (z1:Alt1)' style label for one Delta matrix element.
-
-    Indices are 1-based row (demo) and column (param) positions in the D x P matrix.
-    Falls back to '?' for names not in the known orders so new datasets don't crash.
-    """
     d = (_DEMO_ORDER.index(demo) + 1) if demo in _DEMO_ORDER else "?"
     p = (_PARAM_ORDER.index(param) + 1) if param in _PARAM_ORDER else "?"
     return f"Δ{str(d).translate(_SUBSCRIPTS)},{str(p).translate(_SUBSCRIPTS)} ({demo}:{param})"
@@ -135,22 +113,16 @@ MARGINAL_METRIC_LABELS = {
 # ----------------------------------------------------------------------------- #
 # Data loading + the only derived column the schema does not already store.
 # ----------------------------------------------------------------------------- #
+# adds bias = post_mean - true_value where missing (beta ships its own)
 def load_recovery(table: str, dir_recovery: Path = DIR_RECOVERY) -> pd.DataFrame:
-    """Load a recovery table by short name ('delta'|'mu'|'sigma'|'beta') and add
-    a signed `bias` column where the table stores post_mean + true_value.
-
-    delta/mu/sigma carry post_mean & true_value -> bias = post_mean - true_value
-    (the per-element signed deviation). beta_recovery is already aggregated and
-    ships its own `bias`/`rmse`/`coverage95`; it is returned unchanged.
-    """
     df = pd.read_csv(dir_recovery / RECOVERY_FILES[table])
     if "bias" not in df.columns and {"post_mean", "true_value"}.issubset(df.columns):
         df["bias"] = df["post_mean"] - df["true_value"]
     return df
 
 
+# filters = {col: value | [values]}, all must match
 def _apply_filters(df: pd.DataFrame, filters: Optional[dict]) -> pd.DataFrame:
-    """Keep rows matching every {column: value|list-of-values} in `filters`."""
     if not filters:
         return df
     mask = pd.Series(True, index=df.index)
@@ -160,19 +132,16 @@ def _apply_filters(df: pd.DataFrame, filters: Optional[dict]) -> pd.DataFrame:
     return df.loc[mask]
 
 
+# paired design: keep cells covered by EVERY sampler -> like-for-like boxes
 def paired_complete(df: pd.DataFrame, key=("dataset_key", "demo", "param"), by="sampler"):
-    """Keep only key-cells covered by EVERY `by` group, so each box compares the SAME
-    datasets/elements across samplers (the paired design). Returns (kept_df, report)."""
     key = [k for k in key if k in df.columns]
     nby = df[by].nunique()
     keep = df.groupby(key)[by].transform("nunique") == nby
     return df[keep], {"samplers": nby, "kept_rows": int(keep.sum()), "dropped_rows": int((~keep).sum())}
 
 
+# falls back (loudly) to unpaired if pairing would empty sparse test data
 def _maybe_paired(df: pd.DataFrame, paired: bool, tag: str) -> pd.DataFrame:
-    """Apply paired_complete, but fall back (loudly) to unpaired data if it would empty
-    the frame - e.g. the sparse local TEST data where samplers cover different datasets.
-    On the real grid every sampler covers every dataset, so nothing is dropped."""
     if not paired:
         return df
     pc, rep = paired_complete(df)
@@ -186,7 +155,6 @@ def _maybe_paired(df: pd.DataFrame, paired: bool, tag: str) -> pd.DataFrame:
 
 
 def _print_box_counts(df: pd.DataFrame, facet: Optional[str] = "k_true", by: str = "sampler"):
-    """Print n (element-rows) per box so the figure's sample sizes are explicit."""
     cols = [c for c in (facet, by) if c in df.columns]
     if cols:
         tab = df.groupby(cols).size().rename("n_rows").reset_index()
@@ -196,6 +164,8 @@ def _print_box_counts(df: pd.DataFrame, facet: Optional[str] = "k_true", by: str
 # ----------------------------------------------------------------------------- #
 # THE reusable core. Every recovery boxplot in the study is one call to this.
 # ----------------------------------------------------------------------------- #
+# each box pools all rows surviving `filters` for its x/facet cell;
+# x or color == 'sampler' auto-applies canonical order/labels/colors
 def recovery_boxplot(
     df: pd.DataFrame,
     value: str = "bias",
@@ -217,36 +187,6 @@ def recovery_boxplot(
     logy: bool = False,
     figure_size: tuple = (7.0, 4.5),
 ) -> ggplot:
-    """Boxplot of `value` grouped by `x`, over a tidy recovery table.
-
-    This is the single general entry point: pick the value column to summarize
-    (bias / post_std / abs_diff / any numeric column present), the grouping for
-    the x-axis (default the sampler), optional facets, and optional row filters.
-    Each box aggregates every element-row that survives `filters` for that x
-    group/facet cell (e.g. all D*P Delta elements * all datasets for a sampler).
-
-    Why plotnine: the study already standardizes on it, and the grammar-of-
-    graphics call signature means new variants (different value, facet by
-    scenario/param/k_true, color by n_chains, etc.) are argument changes rather
-    than new plotting code -- exactly what "much more of those kinds of plots"
-    needs. Returns the ggplot so callers can further adjust or `.save()` it.
-
-    Parameters
-    ----------
-    df : tidy recovery frame (from `load_recovery`).
-    value : y-axis column to summarize (default 'bias'; 'post_std' for the SD plot).
-    x : grouping column for the x-axis (default 'sampler').
-    filters : {col: value | [values]} row filter, e.g. {'n_chains': 1}.
-    facet_row, facet_col : columns for a facet_grid (rows x cols).
-    facet_wrap_by : column(s) for facet_wrap (use instead of grid for one dim).
-    facet_scales : 'fixed' | 'free' | 'free_x' | 'free_y' (passed to the facet).
-    color : optional outline grouping (e.g. 'n_chains') drawn as dodged boxes.
-    hline : optional horizontal reference line (e.g. 0.0 for a bias plot).
-    x_order : category order for x; defaults to SAMPLER_ORDER when x == 'sampler'.
-    x_labels : x tick relabeling; defaults to SAMPLER_LABELS when x == 'sampler'.
-    title, xlab, ylab : labels (sensible defaults derived from value/x).
-    figure_size : (width, height) inches.
-    """
     data = _apply_filters(df, filters).copy()
 
     # Stable, study-consistent ordering/labels for the sampler axis (or any x).
@@ -317,8 +257,8 @@ def recovery_boxplot(
     return p
 
 
+# handles both ggplot and mpl Figure (nuts runtime returns a Figure)
 def save(plot, filename: str, dir_fig: Path = DIR_FIG, dpi: int = 150) -> Path:
-    """Save a ggplot or matplotlib Figure under dir_fig (created if missing). Returns the path."""
     out = dir_fig / filename
     out.parent.mkdir(parents=True, exist_ok=True)
     if isinstance(plot, matplotlib.figure.Figure):
@@ -329,14 +269,9 @@ def save(plot, filename: str, dir_fig: Path = DIR_FIG, dpi: int = 150) -> Path:
     return out
 
 
+# bias per element, 4x2 grid; free y so outliers don't squash panels
 def delta_bias_faceted_by_element(n_chains: int = 2, k_true: int = 1,
                                    df=None, *, jitter: bool = True) -> ggplot:
-    """Delta bias with one panel per Δ element in a 4x2 grid, free y-scale per panel.
-
-    Each element gets its own y-axis so outliers in one element do not compress others.
-    Boxplots are transparent (outline only); jittered points are colored by sampler.
-    One combined sampler legend on the right.
-    """
     df = load_recovery("delta") if df is None else df
     df = df.copy()
     df["element"] = df.apply(lambda r: delta_element_label(r["demo"], r["param"]), axis=1)
@@ -378,14 +313,9 @@ def delta_bias_faceted_by_element(n_chains: int = 2, k_true: int = 1,
     return p
 
 
+# same layout as the bias grid, y = post_std (posterior precision)
 def delta_sd_faceted_by_element(n_chains: int = 2, k_true: int = 1,
                                 df=None, *, jitter: bool = True) -> ggplot:
-    """Posterior SD of Delta with one panel per element in a 4x2 grid, free y-scale per panel.
-
-    Same layout as delta_bias_faceted_by_element: transparent boxes, jitter colored by sampler,
-    one legend on the right. y-axis shows the posterior standard deviation (post_std), which
-    reflects how precisely each sampler pins down the corresponding Delta element.
-    """
     df = load_recovery("delta") if df is None else df
     df = df.copy()
     df["element"] = df.apply(lambda r: delta_element_label(r["demo"], r["param"]), axis=1)
@@ -425,14 +355,9 @@ def delta_sd_faceted_by_element(n_chains: int = 2, k_true: int = 1,
     return p
 
 
+# y = per-seed squared error; mean over seeds = MSE in delta_bias_mse_table
 def delta_mse_faceted_by_element(n_chains: int = 2, k_true: int = 1,
                                   df=None, *, jitter: bool = True) -> ggplot:
-    """Squared error (post_mean - true_value)^2 of Delta per element in a 4x2 grid.
-
-    Same layout as delta_bias_faceted_by_element. Each jittered point is one replicate
-    seed; the box summarizes the distribution of squared errors across seeds, whose
-    MEAN over seeds is the MSE reported in delta_bias_mse_table.
-    """
     df = load_recovery("delta") if df is None else df
     df = df.copy()
     df["element"] = df.apply(lambda r: delta_element_label(r["demo"], r["param"]), axis=1)
@@ -473,17 +398,10 @@ def delta_mse_faceted_by_element(n_chains: int = 2, k_true: int = 1,
     return p
 
 
+# fitted-vs-true marginal distance by k_true; Hellinger is the primary
+# metric (bounded [0,1]); grid = eval window ('full' | 'chebyshev')
 def marginal_distance_by_ktrue(n_chains: int = 2, metric: str = "Hellinger",
                                df=None, *, grid: str = "chebyshev") -> ggplot:
-    """Distance between fitted marginal density and true DGP marginal, by true component count.
-
-    x-axis = k_true, boxplots dodged by sampler, faceted by parameter (4 panels).
-    Each box pools ~100 replicate seeds; each data point is one fit.
-    The `metric` argument selects which distance to plot; see MARGINAL_METRICS for options.
-    Hellinger is the primary metric (bounded in [0,1] and symmetric); KL/JSD/TVD
-    are supplementary. `grid` selects the evaluation-grid scenario the distances were
-    computed on ('full' or 'chebyshev'; every metric is stored for both).
-    """
     df = load_recovery("marginal_distances") if df is None else df
     if "grid" in df.columns:
         df = df[df["grid"] == grid]
@@ -524,14 +442,9 @@ def marginal_distance_by_ktrue(n_chains: int = 2, metric: str = "Hellinger",
     return p
 
 
+# all metrics for one k_true - quick check they agree on the ordering
 def marginal_distances_faceted_by_metric(n_chains: int = 2, k_true: int = 1,
                                           df=None, *, grid: str = "chebyshev") -> ggplot:
-    """All five distance metrics in one figure for a single k_true value.
-
-    x-axis = sampler, faceted by metric (5 rows) and param (4 cols).
-    Useful for a quick side-by-side sanity check that the metrics agree on ordering.
-    `grid` selects the evaluation-grid scenario ('full' or 'chebyshev').
-    """
     df = load_recovery("marginal_distances") if df is None else df
     if "grid" in df.columns:
         df = df[df["grid"] == grid]
@@ -572,21 +485,11 @@ def marginal_distances_faceted_by_metric(n_chains: int = 2, k_true: int = 1,
     return p
 
 
+# one metric, k_true x param grid; drops non-finite rows (KL can be inf
+# in the deep tails) and prints how many were cut
 def marginal_metric_boxplot(metric: str = "Hellinger", n_chains: int = 2,
                             df=None, *, grid: str = "chebyshev",
                             jitter: bool = True) -> ggplot:
-    """Per-metric marginal-distance boxplot comparing the samplers against the true DGP.
-
-    x-axis = sampler, faceted as a k_true (rows) x param (cols) grid, free y per panel.
-    Each box pools the replicate seeds for that (k_true, param, sampler) cell; each point is
-    one fit. Directly answers: under `metric`, which sampler's fitted marginal sits closest
-    to the true DGP marginal, per parameter and per overspecification level.
-
-    Non-finite values are dropped (e.g. KL = inf where the model has mass in the true
-    marginal's deep tail), so the boxplot renders cleanly; a note prints how many were cut.
-    `metric` is one of MARGINAL_METRICS. `grid` selects the evaluation-grid scenario the
-    distances were computed on ('full' or 'chebyshev').
-    """
     df = load_recovery("marginal_distances") if df is None else df
     if "grid" in df.columns:
         df = df[df["grid"] == grid]
@@ -635,18 +538,10 @@ def marginal_metric_boxplot(metric: str = "Hellinger", n_chains: int = 2,
     return p
 
 
+# model's own mass inside the eval window vs the Chebyshev bound; dashed
+# line 0.96 = 1 - 1/5**2; 'full' grid trivially retains ~100%
 def retained_mass_boxplot(n_chains: int = 2, df=None, *, grid: str = "chebyshev",
                           jitter: bool = True) -> ggplot:
-    """Realised probability mass of each model's own marginal retained inside the
-    evaluation-grid window (mc.retained_mass), vs the theoretical Chebyshev guarantee.
-
-    x-axis = sampler, faceted as a k_true (rows) x param (cols) grid, free y per panel.
-    Each box pools the replicate seeds for that (k_true, param, sampler) cell; each point
-    is one fit. Dashed line at 0.96 = the theoretical minimum guaranteed by Chebyshev's
-    inequality at k=5 (1 - 1/5**2); values should sit at or above it. `grid` selects the
-    evaluation-grid scenario ('full' trivially retains ~100%; 'chebyshev' is the
-    meaningful case).
-    """
     df = load_recovery("marginal_distances") if df is None else df
     if "grid" in df.columns:
         df = df[df["grid"] == grid]
@@ -688,15 +583,9 @@ def retained_mass_boxplot(n_chains: int = 2, df=None, *, grid: str = "chebyshev"
     return p
 
 
+# seeds with KL(model||true) = +inf, i.e. model mass where true density
+# is ~0; the 'full' grid hits this far more than the trimmed one
 def kl_inf_count_plot(n_chains: int = 2, df=None, *, grid: str = "chebyshev") -> ggplot:
-    """Number of seeds where KL(model||true) came back +inf (catastrophic tail
-    mismatch: the fitted marginal puts mass where the true DGP density is ~0).
-
-    x-axis = k_true, bars dodged by sampler, faceted by parameter (4 panels). y = raw
-    count of +inf seeds out of ~100. `grid` selects the evaluation-grid scenario the
-    distances were computed on - the 'full' envelope is far more prone to this than the
-    'chebyshev'-trimmed grid, since it stretches into the deep tails of surplus components.
-    """
     df = load_recovery("marginal_distances") if df is None else df
     if "grid" in df.columns:
         df = df[df["grid"] == grid]
@@ -736,13 +625,10 @@ def kl_inf_count_plot(n_chains: int = 2, df=None, *, grid: str = "chebyshev") ->
     return p
 
 
+# all samplers dodged over k_true; log y since NUTS blows up on
+# overspecified mixtures while hmc/bayesm stay flat (headline finding)
 def runtime_samplers_by_ktrue(n_chains: int = 2, df: Optional[pd.DataFrame] = None, *,
                               logy: bool = True, jitter: bool = False) -> ggplot:
-    """Runtime by true-component count, with the SAMPLERS side by side (same layout as
-    delta_bias_samplers_by_element). x-axis = k_true (1/2/3/5); one dodged box per sampler,
-    pooling the per-fit sampling time over all seeds. Log y by default, since NUTS runtime
-    blows up on overspecified mixtures (k_true < k_model) while HMC/bayesm stay flat - the
-    headline cost finding. Source: runs.csv (runtime_s = the timed sampler call)."""
     df = load_recovery("runs") if df is None else df
     df = df.copy()
     filters = {"n_chains": n_chains}
@@ -760,15 +646,12 @@ def runtime_samplers_by_ktrue(n_chains: int = 2, df: Optional[pd.DataFrame] = No
     )
 
 
+# one sampler by k_true; unit defaults to 'h' for nuts, 'min' otherwise.
+# unit='h' adds a right-hand hours axis and returns an mpl Figure
+# (plotnine/mizani 0.14 has no sec_axis), else a ggplot in minutes
 def runtime_by_ktrue(sampler: str = "nuts", n_chains: int = 2,
                      df: Optional[pd.DataFrame] = None, *,
                      unit: Optional[str] = None, jitter: bool = True):
-    """Runtime by k_true for ONE sampler - transparent boxes, colored outline and jitter points.
-
-    unit: 'h' (hours) or 'min' (minutes); default = hours for nuts, minutes for hmc/bayesm.
-    For NUTS (unit='h'): data stored in minutes, left axis = min., right axis = h. every 0.5h.
-    Returns a matplotlib Figure for NUTS (dual axis) or a ggplot for the others.
-    """
     df = load_recovery("runs") if df is None else df
     df = df.copy()
     if unit is None:
@@ -830,12 +713,9 @@ def runtime_by_ktrue(sampler: str = "nuts", n_chains: int = 2,
     return fig
 
 
+# c1 runtimes by sampler, one panel per k_true; log y (cost spans decades)
 def runtime_plot(df: Optional[pd.DataFrame] = None, *, logy: bool = True,
                  jitter: bool = True, paired: bool = True) -> ggplot:
-    """Wall-clock runtime per fit, by sampler, one panel per true-component count k_true
-    (n_chains==1). Each box = the per-dataset runtimes for that (k_true, sampler). Log y by
-    default since sampler cost spans orders of magnitude (NUTS trajectory cost blows up on
-    overspecified mixtures while HMC/bayesm stay flat). Source: runs.csv (one row per fit)."""
     df = load_recovery("runs") if df is None else df
     d = _maybe_paired(_apply_filters(df, {"n_chains": 1}), paired, "runtime")
     _print_box_counts(d)

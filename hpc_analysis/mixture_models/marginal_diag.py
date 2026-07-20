@@ -1,33 +1,8 @@
-"""
-Convergence diagnostics of the marginal comparison, mixture_c2.
-
-Source: data/out/mixture_c2/marginal_diagnostics.csv (src.summaries ->
-marginal_comparison.functional_diagnostics). Every quantity here is LABEL-INVARIANT, so
-relabeling never touches it - these are Goose-identical arviz diagnostics (the exact
-az.rhat / az.ess calls liesel.goose.summary_m makes) of grid-free scalar FUNCTIONALS of
-each per-draw marginal (Rossi Eq. 5.5.19): the marginal mean, sd and the q05/q50/q95
-quantiles. There is one row per (param, functional):
-
-  * Rhat            - rank-normalised split-R-hat (>= 2 chains; c2 only).
-  * ESS_bulk        - bulk effective sample size (central mixing).
-  * ESS_tail        - tail effective sample size (5%/95% quantile mixing).
-  * ESS_bulk/s,
-    ESS_tail/s      - effective draws per fit-second (ESS / total wall-clock incl. warmup,
-                      from meta.json runtime_s) - the cross-sampler EFFICIENCY metric.
-                      Renamed ESS_bulk_per_s / ESS_tail_per_s on load ('/' would parse as
-                      a division inside plotnine aes()).
-
-The old grid-based density-series / moment-series ESS/R-hat (min_ESS, max_Rhat, kind,
-grid columns) were replaced upstream by these functional diagnostics; this module reads
-the new schema only. Read ESS only where R-hat ~ 1.
-
-Thresholds: R-hat <= 1.1 is the study-wide convergence gate (label_switching.classify_
-outcome); ESS >= 400 is the rule-of-thumb target for a stable functional estimate. Both
-are drawn as reference lines and reported as pass-rates. c2 (2-chain) runs only.
-
-Run from the repo root with the project venv:
-    .venv/Scripts/python.exe hpc_analysis/mixture_models/marginal_diag.py
-"""
+# R-hat / ESS of scalar functionals (mean, sd, q05/q50/q95) of each
+# per-draw marginal - label-invariant, so ECR never touches these.
+# reads data/out/mixture_c2/marginal_diagnostics.csv; c2 runs only.
+# read ESS only where R-hat ~ 1.
+# run: .venv/Scripts/python.exe hpc_analysis/mixture_models/marginal_diag.py
 from __future__ import annotations
 
 import sys
@@ -89,10 +64,8 @@ DIR_OUT_BASE = DIR_FIG / "marginal_comparison"
 # --------------------------------------------------------------------------------- #
 # Load.
 # --------------------------------------------------------------------------------- #
+# ESS_*/s cols renamed - '/' would parse as division in aes().
 def load_diag(n_chains: int = 2, df: Optional[pd.DataFrame] = None) -> pd.DataFrame:
-    """Return the functional-diagnostics frame for the given chain count, with the
-    ESS-per-second columns renamed to plotnine-safe identifiers ('/' parses as a
-    division inside aes())."""
     d = load_recovery("marginal_diagnostics") if df is None else df.copy()
     d = d.rename(columns={"ESS_bulk/s": "ESS_bulk_per_s", "ESS_tail/s": "ESS_tail_per_s"})
     d = d[d["n_chains"] == n_chains].copy()
@@ -102,7 +75,6 @@ def load_diag(n_chains: int = 2, df: Optional[pd.DataFrame] = None) -> pd.DataFr
 
 
 def _prep(d: pd.DataFrame) -> tuple[pd.DataFrame, list]:
-    """Apply canonical ordered categoricals (sampler, k_true, functional, param)."""
     sampler_order = [s for s in SAMPLER_ORDER if s in set(d["sampler"])]
     func_order = [f for f in FUNC_ORDER if f in set(d["functional"])]
     param_order = [p for p in _PARAM_ORDER if p in set(d["param"])]
@@ -178,9 +150,8 @@ def plot_ess_tail_per_s_grid(n_chains: int = 2, df: Optional[pd.DataFrame] = Non
 # --------------------------------------------------------------------------------- #
 # Tables.
 # --------------------------------------------------------------------------------- #
+# median/q75/max R-hat + pass-rate frac(Rhat <= RHAT_THRESH).
 def rhat_summary_table(n_chains: int = 2, d: Optional[pd.DataFrame] = None) -> pd.DataFrame:
-    """Per (k_true, functional, param, sampler): median / q75 / max R-hat and the
-    convergence pass-rate frac(R-hat <= 1.1)."""
     d = load_diag(n_chains) if d is None else d
     g = d.dropna(subset=["Rhat"]).groupby(
         ["k_true", "functional", "param", "sampler"], observed=True)["Rhat"]
@@ -189,9 +160,8 @@ def rhat_summary_table(n_chains: int = 2, d: Optional[pd.DataFrame] = None) -> p
     return _finish(out, ["median_rhat", "q75_rhat", "max_rhat", "frac_converged"])
 
 
+# bulk/tail ESS medians, frac(ESS_bulk >= ESS_MIN), median ESS/s.
 def ess_summary_table(n_chains: int = 2, d: Optional[pd.DataFrame] = None) -> pd.DataFrame:
-    """Per (k_true, functional, param, sampler): bulk/tail ESS medians and the frac(ESS_bulk
-    >= 400) pass-rate, plus the median bulk/tail ESS per fit-second (efficiency)."""
     d = load_diag(n_chains) if d is None else d
     g = d.groupby(["k_true", "functional", "param", "sampler"], observed=True)
     out = g.agg(median_ess_bulk=("ESS_bulk", "median"),
@@ -204,8 +174,8 @@ def ess_summary_table(n_chains: int = 2, d: Optional[pd.DataFrame] = None) -> pd
                          "median_ess_bulk_per_s", "median_ess_tail_per_s"])
 
 
+# canonical ordering + rounding, shared by both tables
 def _finish(out: pd.DataFrame, round_cols: list) -> pd.DataFrame:
-    """Canonical sampler/functional/param ordering + rounding for a summary table."""
     sampler_order = [s for s in SAMPLER_ORDER if s in set(out["sampler"])]
     func_order = [f for f in FUNC_ORDER if f in set(out["functional"])]
     param_order = [p for p in _PARAM_ORDER if p in set(out["param"])]

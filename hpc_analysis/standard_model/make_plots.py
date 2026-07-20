@@ -1,17 +1,8 @@
-"""
-Regenerate the full standard_model figure set from data/out/standard_model/*.csv.
-
-Run after the gather step whenever new runs are gathered. Writes PNGs to
-hpc_analysis/standard_model/out/{delta,mu,sigma,runtime,marginal_comparison}/.
-All figures cover the 2-chain (c2) jobs 200-202 with the three samplers
-bayesm / nuts / hmc; the standard model is a single condition cell
-(k_true == k_model == 1), so there are no per-k_true figure variants.
-Marginal-distance figures are produced once per evaluation grid ('full' and
-'chebyshev'; full/trimmed output subfolder), including the marginal-series ESS/R-hat
-diagnostics (marginal_diag).
-
-    .venv/Scripts/python.exe hpc_analysis/standard_model/make_plots.py
-"""
+# Regenerate the full standard_model figure set (jobs 200-202, c2 only).
+# Reads data/out/standard_model/*.csv, writes PNGs under out/<topic>/.
+# Marginal figures once per grid ('full' -> full/, 'chebyshev' -> trimmed/),
+# incl. the ESS/R-hat diagnostics from marginal_diag. Run after gathering:
+# .venv/Scripts/python.exe hpc_analysis/standard_model/make_plots.py
 
 import sys
 from pathlib import Path

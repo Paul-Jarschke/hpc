@@ -1,29 +1,8 @@
-"""
-Batch post-processing for the mixture experiments.
-
-Reads every run's saved FULL posterior (<JOB_GLOB>/out[-test]/posterior_raw/*.pkl plus its
-meta.json) and re-derives every per-run tidy table via src.summaries.per_run_tables (the
-SAME code each run writes on-node), writing concatenated CSVs to data/out/<out-name>/:
-
-  runs, ecr_report, weights, pvec_means, convergence, moments,
-  delta_recovery, beta_recovery, beta_summary, diagnostics, marginal_distances,
-  marginal_diagnostics
-
-ALL of these (including the marginal distances vs the true DGP on BOTH grid scenarios -
-"full" and "chebyshev", see src/summaries.py - and the marginal-density ESS/R-hat) are
-produced per-run by src.summaries, so this script only concatenates what each run already
-computes on-node - the gathered CSVs are byte-identical to the per-run out/<table>/*.csv
-files.
-
-Defaults target the 2-chain jobs 100-103 (updated port @ 893e63f). The older k5 jobs
-004-009 can still be gathered explicitly - but note the re-vendored modules no longer
-half-split 1-chain runs, so c1 rhats gather as NaN:
-    .venv/Scripts/python.exe analysis/post_process.py --glob "jobs/00[4-9]*-k5-*" --out-name k5model_mixture
-
-Run with the project venv from the repo root:
-    .venv/Scripts/python.exe analysis/post_process.py             # real runs (out/)
-    .venv/Scripts/python.exe analysis/post_process.py --testing   # local (out-test/)
-"""
+# Re-derive every per-run table from the saved posterior_raw pickles
+# via src.summaries.per_run_tables (same code the runs use on-node),
+# concat into data/out/<out-name>/*.csv. Defaults: jobs 100-103 ->
+# mixture_c2; old 004-009 via --glob (their c1 rhats gather as NaN).
+# run: .venv/Scripts/python.exe hpc_analysis/mixture_models/post_process.py
 
 import argparse
 import json
@@ -74,7 +53,6 @@ def load_truth(dataset_key):
 
 
 def per_run(pkl, meta_f, acc):
-    """Re-derive every per-run table for one run via src.summaries (same code as on-node)."""
     meta = json.load(open(meta_f))
     post = pickle.load(open(pkl, "rb"))
     truth = load_truth(meta["dataset_key"])

@@ -1,27 +1,8 @@
-"""
-Batch post-processing for the STANDARD-model experiments (jobs 200-202).
-
-Reads every run's saved FULL posterior (<JOB_GLOB>/out[-test]/posterior_raw/*.pkl plus its
-meta.json) and re-derives every per-run tidy table via src.summaries_standard.per_run_tables
-(the SAME code each run writes on-node), writing concatenated CSVs to data/out/<out-name>/:
-
-  runs, convergence, moments, mu_recovery, sigma_recovery, delta_recovery, beta_recovery,
-  beta_summary, diagnostics, marginal_distances, marginal_diagnostics
-
-ALL of these (including the marginal distances vs the true DGP on BOTH grid scenarios -
-"full" and "chebyshev", see src/summaries_standard.py - and the marginal-density ESS/R-hat)
-are produced per-run by src.summaries_standard, so this script only concatenates what each
-run already computes on-node - the gathered CSVs are byte-identical to the per-run
-out/<table>/*.csv files. No ECR/weights/pvec tables here: K = 1 has no label switching.
-
-Defaults target the 2-chain standard jobs 200-202 (posterior format: PLAIN keys mu /
-sigma_inv_chol_latent / beta_i / Delta, no component axis; datasets in
-data/in/standard_model/).
-
-Run with the project venv from the repo root:
-    .venv/Scripts/python.exe hpc_analysis/standard_model/post_process.py             # real runs (out/)
-    .venv/Scripts/python.exe hpc_analysis/standard_model/post_process.py --testing   # local (out-test/)
-"""
+# Gather standard-model runs (jobs 200-202): read posterior_raw/*.pkl +
+# meta.json per run, re-derive all per-run tables via src.summaries_standard
+# (same code as on-node), concat to data/out/standard_model/*.csv.
+# K=1: no ECR/weights/pvec tables. --testing gathers out-test/ instead.
+# run: .venv/Scripts/python.exe hpc_analysis/standard_model/post_process.py
 
 import argparse
 import json
@@ -73,8 +54,6 @@ def load_truth(dataset_key):
 
 
 def per_run(pkl, meta_f, acc):
-    """Re-derive every per-run table for one run via src.summaries_standard (same code
-    as on-node)."""
     meta = json.load(open(meta_f))
     post = pickle.load(open(pkl, "rb"))
     truth = load_truth(meta["dataset_key"])

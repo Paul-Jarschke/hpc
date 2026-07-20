@@ -1,45 +1,8 @@
-"""
-Estimated number of mixture components for the mixture_c2 study (jobs 100-103).
-
-Every dataset is fit with an OVERSPECIFIED k_model = 5 regardless of the true count
-k_true in {1, 2, 3, 5}. This module asks: how many of the 5 fitted components carry
-appreciable weight, and does that recover k_true? It works entirely from the gathered
-per-run weight tables (no posterior reloads):
-
-  * weights.csv    - ECR-relabeled per-slot posterior weight (post_mean, ci_low, ...),
-                     slots ordered by descending mean weight. THE source for the counts.
-  * pvec_means.csv - per-slot mean weight BEFORE and AFTER ECR (both ranked descending),
-                     used only for the weight-profile figures (shows why ECR is needed).
-
-Why the after-ECR weights (and not the raw per-slot means): label switching smears the
-raw per-slot means toward uniform, so before relabeling all 5 slots look "active". ECR
-aligns the labels across draws, after which the true components separate cleanly from the
-near-zero spurious ones. See plot_weight_profile_before_after for the visual proof.
-
-Two complementary lenses (both reported):
-
-  Lens 1 - effective number of components (continuous, threshold-free).
-    K_eff = 1 / sum_k w_k^2   (inverse Simpson / participation ratio) on the after-ECR
-    mean weights. Spurious components have tiny w_k, so w_k^2 is negligible and they barely
-    move K_eff: equal 2/3/5-component weights give K_eff = exactly 2/3/5, while a single
-    dominant component gives ~1. A Shannon-perplexity variant exp(-sum w log w) is also
-    reported (weights small components slightly more; inverse Simpson is the primary).
-
-  Lens 2 - integer count via a weight threshold (interpretable "3 real, 2 spurious").
-    est_k = #{k : w_k >= tau}. Primary tau = 0.05, swept over {0.02, 0.05, 0.10} for
-    robustness. A CI-based variant counts only slots whose 95% CI lower bound clears tau
-    (i.e. P(w_k >= tau) >= 0.975) - a stricter "confidently non-empty" count.
-
-Caveat (state it in any writeup): the study uses a symmetric Dirichlet with a = 1.0, which
-is NOT the Rousseau-Mengersen (2011) overfitted-mixture EMPTYING regime (a < d/2). With
-a = 1 the extra components need not be driven to zero - they can retain non-trivial weight
-or split a true component - so est_k / K_eff can systematically OVER-count k_true. Part of
-the signal here is about the prior, not only the sampler; the threshold sweep keeps the
-conclusion honest.
-
-Run from the repo root with the project venv:
-    .venv/Scripts/python.exe hpc_analysis/component_count.py
-"""
+# How many of the k_model=5 slots are real? jobs 100-103, from the
+# after-ECR weights.csv; pre-ECR means are label-smeared (overcount).
+# K_eff = 1/sum(w^2); est_k = #slots with mean weight >= tau.
+# NB a=1 Dirichlet won't empty extras (Rousseau-Mengersen a<d/2).
+# run: .venv/Scripts/python.exe hpc_analysis/mixture_models/component_count.py
 from __future__ import annotations
 
 import sys
@@ -95,9 +58,8 @@ DIR_OUT_PLOTS = "components/plots"
 DIR_OUT_TABLES = DIR_FIG / "components" / "tables"
 
 
+# per-mille suffix so nearby taus stay distinct: 0.01 -> 'est_k_t010'
 def _thr_col(t: float) -> str:
-    """Canonical column name for the est_k count at threshold t, on a per-mille (3-digit)
-    scale so nearby cutoffs stay distinct: 0.01 -> 'est_k_t010', 0.025 -> 'est_k_t025'."""
     return f"est_k_t{int(round(t * 1000)):03d}"
 
 
@@ -108,8 +70,8 @@ CI_COL = _thr_col(PRIMARY_THRESHOLD) + "_ci"
 # --------------------------------------------------------------------------------- #
 # Per-run derivation: one row per fit with both lenses.
 # --------------------------------------------------------------------------------- #
+# one run = one 5-row group of weights.csv (after-ECR slot weights)
 def _run_metrics(g: pd.DataFrame, thresholds: Sequence[float], primary: float) -> pd.Series:
-    """Both lenses for ONE run's 5 after-ECR slot weights (a 5-row group of weights.csv)."""
     w = np.clip(g["post_mean"].to_numpy(dtype=float), 0.0, None)
     s = w.sum()
     wn = w / s if s > 0 else w                                  # normalize defensively (sums ~1)
@@ -125,14 +87,11 @@ def _run_metrics(g: pd.DataFrame, thresholds: Sequence[float], primary: float) -
     return pd.Series(out)
 
 
+# one row per run: k_eff (inv Simpson + Shannon) + est_k per tau.
+# must use the ECR-relabeled weights; raw slot means over-count.
 def per_run_counts(df: Optional[pd.DataFrame] = None, *, n_chains: Optional[int] = None,
                    thresholds: Sequence[float] = THRESHOLDS,
                    primary: float = PRIMARY_THRESHOLD) -> pd.DataFrame:
-    """One row per run: k_eff (inverse Simpson + Shannon) and est_k at each threshold.
-
-    Reads weights.csv (after-ECR slot weights). Optionally filtered to n_chains. The count
-    is computed from the mean weight per slot, so it needs the ECR-relabeled weights that
-    weights.csv already stores (raw label-switched means would over-count)."""
     df = load_recovery("weights") if df is None else df
     if n_chains is not None:
         df = df[df["n_chains"] == n_chains]
@@ -154,12 +113,9 @@ def per_run_counts(df: Optional[pd.DataFrame] = None, *, n_chains: Optional[int]
 # --------------------------------------------------------------------------------- #
 # Aggregation tables (per sampler x k_true).
 # --------------------------------------------------------------------------------- #
+# headline: K_eff stats + est_k accuracy per (k_true, sampler);
+# 'correct' = estimated count == k_true (at the primary tau).
 def recovery_summary_table(n_chains: int = 2, runs: Optional[pd.DataFrame] = None) -> pd.DataFrame:
-    """Headline table: per (k_true, sampler), how well the fitted count recovers k_true.
-
-    Columns: n_sim, mean/median/sd K_eff (lens 1), mean_est_k + frac_{correct,over,under}
-    at the primary threshold (lens 2), the CI-based mean count, and frac_correct for a
-    rounded K_eff. 'correct' == estimated count equals k_true."""
     runs = per_run_counts(n_chains=n_chains) if runs is None else runs.copy()
     kt = runs["k_true"].to_numpy()
     est = runs[PRIMARY_COL].to_numpy()
@@ -191,10 +147,9 @@ def recovery_summary_table(n_chains: int = 2, runs: Optional[pd.DataFrame] = Non
     return out.sort_values(["k_true", "sampler"]).reset_index(drop=True)
 
 
+# p_estJ = fraction of seeds with est_k == J; rows sum to 1.
 def confusion_table(n_chains: int = 2, runs: Optional[pd.DataFrame] = None,
                     est_col: str = PRIMARY_COL) -> pd.DataFrame:
-    """Confusion distribution: per (k_true, sampler), the fraction of seeds whose estimated
-    count equals each value in 1..k_model. Columns p_est1..p_est5 sum to 1 per row."""
     runs = per_run_counts(n_chains=n_chains) if runs is None else runs.copy()
     frac = (
         runs.groupby(["k_true", "sampler"], observed=True)[est_col]
@@ -209,10 +164,9 @@ def confusion_table(n_chains: int = 2, runs: Optional[pd.DataFrame] = None,
     return wide.sort_values(["k_true", "sampler"]).reset_index(drop=True)
 
 
+# mean_est_k / frac_correct vs tau, long over swept thresholds.
 def threshold_sensitivity_table(n_chains: int = 2,
                                 runs: Optional[pd.DataFrame] = None) -> pd.DataFrame:
-    """How mean_est_k and frac_correct move with the weight threshold tau, per (k_true,
-    sampler). Long over the swept thresholds so the robustness of the count is one table."""
     runs = per_run_counts(n_chains=n_chains) if runs is None else runs.copy()
     rows = []
     for t in THRESHOLDS:
@@ -229,8 +183,6 @@ def threshold_sensitivity_table(n_chains: int = 2,
 
 
 def _order_samplers(df: pd.DataFrame) -> pd.DataFrame:
-    """Apply the canonical sampler ordering (bayesm, bayesm_gibbs, nuts, hmc) as an
-    ordered Categorical."""
     order = [s for s in SAMPLER_ORDER if s in set(df["sampler"])]
     df = df.copy()
     df["sampler"] = pd.Categorical(df["sampler"], categories=order, ordered=True)
@@ -240,10 +192,8 @@ def _order_samplers(df: pd.DataFrame) -> pd.DataFrame:
 # --------------------------------------------------------------------------------- #
 # Plots.
 # --------------------------------------------------------------------------------- #
+# K_eff by k_true; one dodged box per sampler over replicate seeds.
 def plot_k_eff_by_ktrue(n_chains: int = 2, runs: Optional[pd.DataFrame] = None) -> ggplot:
-    """Effective number of components (inverse Simpson) by true-component count.
-
-    x = k_true, one dodged box per sampler, distribution over replicate seeds."""
     runs = per_run_counts(n_chains=n_chains) if runs is None else runs.copy()
     sampler_order = [s for s in SAMPLER_ORDER if s in set(runs["sampler"])]
     ktrue_order = [str(k) for k in KTRUE_ORDER if k in set(runs["k_true"])]
@@ -271,9 +221,8 @@ def plot_k_eff_by_ktrue(n_chains: int = 2, runs: Optional[pd.DataFrame] = None) 
     return p
 
 
+# long P(est_k=j) frame, missing cells filled 0 so bars align.
 def _confusion_frac(runs: pd.DataFrame, thresholds: Sequence[float]) -> pd.DataFrame:
-    """Long frame of P(est_k = j) per (threshold, k_true, sampler), with every j in 1..k_model
-    present (missing cells filled 0) so bars align across facets."""
     kts, samps = sorted(runs["k_true"].unique()), sorted(runs["sampler"].unique())
     parts = []
     for t in thresholds:
@@ -292,13 +241,10 @@ def _confusion_frac(runs: pd.DataFrame, thresholds: Sequence[float]) -> pd.DataF
         {"frac": 0.0})
 
 
+# est_k distribution per k_true panel, single tau. dashed line =
+# correct count; mass to its right = over-counting.
 def plot_est_k_confusion(n_chains: int = 2, threshold: float = PRIMARY_THRESHOLD,
                          runs: Optional[pd.DataFrame] = None) -> ggplot:
-    """Distribution of the integer estimated count, faceted by k_true (single threshold).
-
-    One panel per k_true; x = estimated # components (1..5); bar height = fraction of seeds;
-    bars dodged by sampler. The dashed line marks the correct count (x == k_true), so mass on
-    it = correct recovery, mass to the right = over-counting."""
     runs = per_run_counts(n_chains=n_chains) if runs is None else runs.copy()
     frac = _confusion_frac(runs, [threshold])
     sampler_order = [s for s in SAMPLER_ORDER if s in set(frac["sampler"])]
@@ -325,12 +271,10 @@ def plot_est_k_confusion(n_chains: int = 2, threshold: float = PRIMARY_THRESHOLD
     return p
 
 
+# tau (rows, shrinking downward) x k_true (cols) confusion grid;
+# lower tau keeps more spurious comps -> mass shifts right of truth.
 def plot_est_k_confusion_all_tau(n_chains: int = 2, thresholds: Sequence[float] = THRESHOLDS,
                                  runs: Optional[pd.DataFrame] = None) -> ggplot:
-    """All thresholds in ONE figure: a threshold (rows) x k_true (cols) grid of the confusion
-    distribution. Each cell is the single-threshold confusion panel; reading DOWN a column
-    shows how the recovered count shifts as tau shrinks (lower tau keeps more spurious
-    components -> mass moves right of the dashed truth line)."""
     runs = per_run_counts(n_chains=n_chains) if runs is None else runs.copy()
     frac = _confusion_frac(runs, list(thresholds))
     sampler_order = [s for s in SAMPLER_ORDER if s in set(frac["sampler"])]
@@ -361,9 +305,8 @@ def plot_est_k_confusion_all_tau(n_chains: int = 2, thresholds: Sequence[float] 
     return p
 
 
+# per-slot mean + IQR band across seeds
 def _weight_profile_frame(df: pd.DataFrame, group_extra: list) -> pd.DataFrame:
-    """Mean weight per slot with the IQR band across seeds, grouped by (k_true, sampler,
-    slot, *group_extra)."""
     g = ["k_true", "sampler", "slot", *group_extra]
     return (df.groupby(g, observed=True)["value"]
             .agg(mean="mean",
@@ -372,10 +315,9 @@ def _weight_profile_frame(df: pd.DataFrame, group_extra: list) -> pd.DataFrame:
             .reset_index())
 
 
+# after-ECR weight per slot, line+IQR per sampler; black dashed =
+# true profile (1/k_true then 0). shows where the weights fall off.
 def plot_weight_profile_by_ktrue(n_chains: int = 2, df: Optional[pd.DataFrame] = None) -> ggplot:
-    """After-ECR mean weight per slot (descending), one line+IQR band per sampler, faceted by
-    k_true. The black dashed step is the true weight profile (1/k_true for the first k_true
-    slots, 0 after). Shows WHERE the weights fall off - the qualitative basis for the τ cut."""
     df = load_recovery("weights") if df is None else df
     sub = df[df["n_chains"] == n_chains].copy()
     if sub.empty:
@@ -414,14 +356,11 @@ def plot_weight_profile_by_ktrue(n_chains: int = 2, df: Optional[pd.DataFrame] =
     return p
 
 
+# before vs after ECR (source: pvec_means.csv). before relabeling,
+# label switching smears slot means toward uniform - all 5 slots
+# look active; after, true comps separate from the near-zero ones.
 def plot_weight_profile_before_after(n_chains: int = 2,
                                      df: Optional[pd.DataFrame] = None) -> ggplot:
-    """Ranked MEAN weight per slot BEFORE vs AFTER ECR (facet grid k_true x stage;
-    mean lines only, no IQR band).
-
-    Demonstrates why ECR is required for the count: before relabeling the per-slot means are
-    smeared toward uniform (label switching), so every slot looks active; after relabeling the
-    true components separate from the near-zero spurious ones. Source: pvec_means.csv."""
     df = load_recovery("pvec_means") if df is None else df
     sub = df[df["n_chains"] == n_chains].copy()
     if sub.empty:

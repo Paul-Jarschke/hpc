@@ -1,12 +1,8 @@
-"""
-Generate summary tables for the mixture_c2 sampler comparison (jobs 100-103).
-
-Run after scripts/gather_summaries.py has refreshed data/out/mixture_c2/:
-    .venv/Scripts/python.exe hpc_analysis/make_tables.py
-
-Writes CSVs to hpc_analysis/mixture_models/out/<topic>/tables/. Marginal-distance tables are produced
-once per evaluation grid ('full' and 'chebyshev'; filename suffix _<grid>).
-"""
+# Summary tables for the mixture_c2 sampler comparison (jobs 100-103).
+# Run after scripts/gather_summaries.py refreshes data/out/mixture_c2/.
+# CSVs -> hpc_analysis/mixture_models/out/<topic>/tables/; marginal
+# tables once per eval grid (full/ and trimmed/ subfolders).
+# run: .venv/Scripts/python.exe hpc_analysis/mixture_models/make_tables.py
 
 from __future__ import annotations
 
@@ -38,14 +34,9 @@ SAMPLER_ORDER = ["bayesm", "bayesm_gibbs", "nuts", "hmc"]
 SAMPLER_LABELS = {"bayesm": "bayesm", "bayesm_gibbs": "Replication", "nuts": "NUTS", "hmc": "HMC"}
 
 
+# bias/MSE + MCSEs per Morris et al. 2019 Table 6, from per-seed
+# d_i = post_mean_i - true_value_i (per-replication truth)
 def _bias_mse_stats(d: pd.Series) -> dict:
-    """Point estimates and Monte Carlo SEs of bias and MSE (Morris et al. 2019, Table 6),
-    from the per-replication differences d_i = post_mean_i - true_value_i (each evaluated
-    against the per-replication truth theta_i):
-
-        bias = mean(d),    mcse_bias = std(d,   ddof=1) / sqrt(n_sim)
-        mse  = mean(d^2),  mcse_mse  = std(d^2, ddof=1) / sqrt(n_sim)
-    """
     d = np.asarray(d, dtype=float)
     n = d.size
     sq = d ** 2
@@ -58,12 +49,8 @@ def _bias_mse_stats(d: pd.Series) -> dict:
     }
 
 
+# runtime five-number summary + mean per (k_true, sampler), in minutes
 def runtime_summary_table(n_chains: int = CHAINS) -> pd.DataFrame:
-    """Runtime summary statistics by sampler and k_true (in minutes).
-
-    Returns one row per (k_true, sampler) with columns:
-        min, q1 (25th pct), median, q3 (75th pct), max, n_runs
-    """
     df = load_recovery("runs")
     df = df[df["n_chains"] == n_chains].copy()
     df["runtime_min"] = df["runtime_s"] / 60.0
@@ -97,17 +84,8 @@ def runtime_summary_table(n_chains: int = CHAINS) -> pd.DataFrame:
     )
 
 
+# post_std distribution across seeds per (k_true, element, sampler)
 def delta_sd_summary_table(n_chains: int = CHAINS) -> pd.DataFrame:
-    """Distribution of posterior SD for every Delta element, by sampler and k_true.
-
-    For each (k_true, element, sampler) cell the statistics summarize the post_std
-    values across all replicate seeds, i.e. how tightly (and consistently) each
-    sampler pins down each element over repeated datasets.
-
-    Returns a tidy long DataFrame:
-        rows    = (k_true, element, sampler)
-        columns = min, q1, mean, median, q3, max, n_sim
-    """
     df = load_recovery("delta")
     df = df[df["n_chains"] == n_chains].copy()
     df["element"] = df.apply(lambda r: delta_element_label(r["demo"], r["param"]), axis=1)
@@ -139,20 +117,9 @@ def delta_sd_summary_table(n_chains: int = CHAINS) -> pd.DataFrame:
     return agg[["k_true", "element", "sampler", *stat_cols, "n_sim"]].reset_index(drop=True)
 
 
+# bias/MSE + MCSEs per element (see _bias_mse_stats); wide, one column
+# block per sampler
 def delta_bias_mse_table(n_chains: int = CHAINS) -> pd.DataFrame:
-    """Bias, MSE and their Monte Carlo SEs for every Delta element, by sampler and k_true.
-
-    For each (sampler, k_true, element) cell across n_sim replicate seeds, from the
-    per-seed differences d_i = post_mean_i - true_value_i (Morris et al. 2019, Table 6):
-        bias      = mean(d_i)
-        mcse_bias = std(d_i,   ddof=1) / sqrt(n_sim)
-        mse       = mean(d_i^2)
-        mcse_mse  = std(d_i^2, ddof=1) / sqrt(n_sim)
-
-    Returns a wide DataFrame:
-        rows    = (k_true, element)
-        columns = {bias, mcse_bias, mse, mcse_mse, n_sim}_{sampler}
-    """
     df = load_recovery("delta")
     df = df[df["n_chains"] == n_chains].copy()
     df["element"] = df.apply(lambda r: delta_element_label(r["demo"], r["param"]), axis=1)
@@ -172,20 +139,10 @@ def delta_bias_mse_table(n_chains: int = CHAINS) -> pd.DataFrame:
     return wide.reset_index()
 
 
+# distance distributions per (k_true, param, sampler, metric); lower =
+# closer to the true DGP marginal; grid = 'full' | 'chebyshev'
 def marginal_distance_summary_table(n_chains: int = CHAINS,
                                     grid: str = "chebyshev") -> pd.DataFrame:
-    """Distribution of all five marginal distance metrics, by sampler, k_true, and parameter.
-
-    For each (k_true, param, sampler, metric) cell across n_sim replicate seeds, summarises
-    the distribution of KL/TVD/Hellinger/JSD values: lower is better (fitted
-    marginal closer to the true DGP marginal). Hellinger is bounded in [0,1]; the others are
-    unbounded but comparable within a metric. `grid` selects the evaluation-grid scenario
-    ('full' or 'chebyshev') the distances were computed on.
-
-    Returns a tidy long DataFrame:
-        rows    = (k_true, param, sampler, metric)
-        columns = min, q1, mean, median, q3, max, n_sim
-    """
     df = load_recovery("marginal_distances")
     if "grid" in df.columns:
         df = df[df["grid"] == grid]
@@ -224,21 +181,9 @@ def marginal_distance_summary_table(n_chains: int = CHAINS,
     ).reset_index(drop=True)
 
 
+# retained_mass_model summaries; frac_below_guarantee = share of seeds
+# under the Chebyshev bound 0.96 (1 - 1/5**2), should be ~0
 def retained_mass_summary_table(n_chains: int = CHAINS, grid: str = "chebyshev") -> pd.DataFrame:
-    """Distribution of retained_mass_model (mc.retained_mass), by sampler, k_true and
-    parameter - the realised counterpart to the theoretical Chebyshev mass guarantee.
-
-    For each (k_true, param, sampler) cell across n_sim replicate seeds, summarises the
-    fraction of each fitted model's own marginal mass retained inside the evaluation-grid
-    window. frac_below_guarantee = fraction of seeds where retained mass fell BELOW the
-    theoretical minimum (k=5 -> 1 - 1/5**2 = 0.96) - should be ~0 if the Chebyshev fix is
-    working as intended. `grid` selects the evaluation-grid scenario ('full' trivially
-    retains ~100%; 'chebyshev' is the meaningful case).
-
-    Returns a tidy long DataFrame:
-        rows    = (k_true, param, sampler)
-        columns = min, q1, mean, median, q3, max, frac_below_guarantee, n_sim
-    """
     df = load_recovery("marginal_distances")
     if "grid" in df.columns:
         df = df[df["grid"] == grid]
@@ -276,16 +221,9 @@ def retained_mass_summary_table(n_chains: int = CHAINS, grid: str = "chebyshev")
     ).reset_index(drop=True)
 
 
+# seeds with KL = +inf per cell (model mass where true density ~0);
+# 'full' grid is far more prone than the trimmed one
 def kl_inf_summary_table(n_chains: int = CHAINS, grid: str = "chebyshev") -> pd.DataFrame:
-    """Count of seeds where KL(model||true) came back +inf, by sampler, k_true and
-    parameter - a direct measure of catastrophic tail mismatch (the fitted marginal
-    puts mass where the true DGP density is ~0). `grid` selects the evaluation-grid
-    scenario ('full' is far more prone to this than the 'chebyshev'-trimmed grid).
-
-    Returns a tidy long DataFrame:
-        rows    = (k_true, param, sampler)
-        columns = n_inf, n_total, inf_rate
-    """
     df = load_recovery("marginal_distances")
     if "grid" in df.columns:
         df = df[df["grid"] == grid]

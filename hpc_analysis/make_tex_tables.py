@@ -1,67 +1,8 @@
 #!/usr/bin/env python3
-r"""Turn the gathered summary CSVs into FULL-detail booktabs LaTeX fragments.
-
-Usage (from the hpc repo root, after make_tables.py has run for both studies):
-
-    python hpc_analysis/make_tex_tables.py --out /path/to/thesis/tables/sim
-
-Fragments are written into two subfolders of --out: `standard/` and `mixture/`.
-Each fragment is a bare `tabular` (small tables) or `longtable` (large tables)
-environment - caption/label stay in the thesis. Small tables go inside a float:
-
-    \begin{table}[htb]\centering
-      \caption{...}\label{tab:sim-std-delta}
-      \input{tables/sim/standard/delta_recovery}
-    \end{table}
-
-`longtable` fragments (the big per-element / per-metric / convergence tables) are
-`\input` directly - NOT inside a `table` float - and page-break on their own.
-
-Thesis preamble needed:
-
-    \usepackage{booktabs}   % \toprule / \midrule / \bottomrule
-    \usepackage{amsmath}    % \text{}, \widehat, \Delta, \Sigma
-    \usepackage{longtable}  % the big tables (see LONGTABLE list printed at the end)
-
-Two tiers of fragments are produced:
-
-  * FULL tables (every element/param/metric/scenario x sampler, with the
-    Monte-Carlo SEs) - the complete evidence behind each plot.
-  * AGGREGATE tables (prefix `agg_`) - the same information condensed where the
-    full detail is repetitive:
-      agg_recovery.tex        (standard)  one row per parameter block (mu/Delta/Sigma)
-                                          x sampler, aggregated over the block's
-                                          elements: mean/max |bias|, max MCSE,
-                                          mean/max MSE.
-      agg_delta_recovery.tex  (mixture)   same aggregation over the 8 Delta elements,
-                                          per K_true x sampler.
-      agg_convergence.tex     (both)      one row per sampler (x K_true), computed on
-                                          the marginal's MEAN functional and pooled
-                                          over coefficients x seeds: mean/median/max
-                                          R-hat + frac <= 1.1, median ESS (bulk)/(tail).
-      agg_marginal.tex        (both)      median distance (median over seeds, then
-                                          median over the 4 coefficients) per
-                                          grid x metric (x K_true), samplers as columns.
-
-Design
-  * recovery cells: `bias (mcse)` and `mse (mcse)` (4 dp); Unicode element labels
-    Δ₁,₁ / Σ₁,₁ become $\Delta_{1,1}$ / $\Sigma_{1,1}$.
-  * convergence (Liesel-summary style, both studies): R-hat and ESS are computed on
-    the MEAN functional of each coefficient's heterogeneity marginal (its location
-    chain; per-seed values from marginal_diagnostics.csv) - never for individual
-    model parameters (mu/Delta/Sigma) and with no per-functional breakdown. R-hat is
-    summarised over the seeds as mean / median / max + frac(R-hat <= 1.1); ESS as
-    ONE median ESS (bulk) and ONE median ESS (tail) per coefficient.
-  * distribution tables: full min / Q1 / mean / median / Q3 / max (+ extra columns).
-  * mixture study: one COMBINED table per family with k_true as a grouped leading
-    column (blank on repeat); standard study is a single k_true = 1 cell. Exceptions
-    (matching the per-k_true plot files): delta recovery, delta posterior SD and the
-    marginal distances are emitted as one table PER scenario
-    (delta_recovery_kt{1,2,3,5}.tex, delta_sd_kt*.tex, marginal_distances_<grid>_kt*.tex),
-    each mirroring the standard study's layout.
-  * columns matched case-insensitively/defensively; a table whose source CSV or
-    columns are missing is reported and skipped, never written with wrong numbers.
-"""
+# turn the gathered summary CSVs into booktabs LaTeX table fragments
+# run: .venv/Scripts/python.exe hpc_analysis/make_tex_tables.py [--out DIR]
+# fragments go to standard/ + mixture/ subfolders of --out; longtable
+# ones are \input directly (need \usepackage{booktabs, amsmath, longtable})
 from __future__ import annotations
 
 import argparse
@@ -448,11 +389,9 @@ def kl_inf(out: str, root: str, has_kt: bool) -> None:
 # ----------------------------------------------------------------------
 # convergence (R-hat + ESS)
 # ----------------------------------------------------------------------
+# rhat of the marginal's MEAN functional only, liesel-summary style;
+# per-seed marginal_diagnostics.csv rows summarised over seeds
 def convergence_rhat(out: str, data_root: str, has_kt: bool) -> None:
-    """R-hat of the marginal's MEAN functional only (the location chain of each
-    coefficient's heterogeneity marginal) - Liesel-summary style, matching the ESS
-    tables. Per coefficient x sampler, summarised over the seeds: mean / median /
-    max R-hat and the fraction of runs with R-hat <= 1.1."""
     df = _read(_find([os.path.join(data_root, "marginal_diagnostics.csv")]),
                "marginal R-hat (per-seed)")
     if df is None:
@@ -484,11 +423,9 @@ def convergence_rhat(out: str, data_root: str, has_kt: bool) -> None:
           _grouped_rows(agg, group_cols, group_fmt, value_fn))
 
 
+# one median ESS (bulk) + (tail) per coefficient x sampler, MEAN
+# functional only (= the mu_p chain ESS in the standard model)
 def convergence_ess(out: str, root: str, has_kt: bool) -> None:
-    """Marginal ESS, Liesel-summary style: ONE median ESS (bulk) and ONE median ESS (tail)
-    per coefficient x sampler, computed on the marginal's MEAN functional only (the
-    location chain of the heterogeneity marginal - in the standard model exactly the
-    mu_p chain, i.e. the per-parameter ESS a Goose/Liesel summary table reports)."""
     df = _read(_find([f"{root}/marginal_comparison/**/marginal_ess_summary_c2.csv"]),
                "convergence ESS")
     if df is None:
@@ -587,11 +524,10 @@ def component_thresholds(out: str) -> None:
 _AGG_HDR = "$n$ & mean $|$Bias$|$ & max $|$Bias$|$ & max MCSE & mean MSE & max MSE"
 
 
+# one row per (*keys, sampler) pooled over elements; max MCSE(bias)
+# is the conservative uncertainty bound for the aggregated biases
 def _recovery_agg_table(out: str, name: str, long_df: pd.DataFrame, keys: list[str],
                         key_hdr: str, key_spec: str, key_fmt: list) -> None:
-    """Aggregate a long recovery frame over its elements: one row per (*keys, sampler)
-    with mean/max |bias|, the max MCSE(bias) (conservative uncertainty bound for the
-    aggregated biases) and mean/max MSE."""
     df = _samp_ordered(long_df)
 
     def _a(x):
@@ -653,10 +589,9 @@ def agg_delta_recovery_mix(out: str) -> None:
                         "$K_{\\text{true}}$", "c", [lambda v: str(int(v))])
 
 
+# one row per sampler (x k_true), MEAN functional only: rhat + ESS
+# pooled over coefficients x seeds from marginal_diagnostics.csv
 def agg_convergence(out: str, data_root: str, has_kt: bool) -> None:
-    """One row per sampler (x K_true), all computed on the marginal's MEAN functional
-    only and pooled over coefficients x seeds (per-seed marginal_diagnostics.csv):
-    mean / median / max R-hat, frac(R-hat <= 1.1), and median ESS (bulk)/(tail)."""
     df = _read(_find([os.path.join(data_root, "marginal_diagnostics.csv")]),
                "aggregate: marginal R-hat/ESS (per-seed)")
     if df is None:
@@ -691,10 +626,9 @@ def agg_convergence(out: str, data_root: str, has_kt: bool) -> None:
           _grouped_rows(agg, group_cols, group_fmt, value_fn))
 
 
+# median distance per grid x metric (x k_true): median over seeds,
+# then over the 4 coefficients; samplers spread into columns
 def agg_marginal(out: str, root: str, has_kt: bool) -> None:
-    """Marginal distances condensed: per grid x metric (x K_true), the median distance
-    (median across seeds per cell, then median over the 4 coefficients); samplers as
-    columns."""
     frames = []
     for grid in ("full", "trimmed"):
         fn = ("marginal_distance_summary_c2_all.csv" if has_kt
@@ -741,7 +675,7 @@ def agg_marginal(out: str, root: str, has_kt: bool) -> None:
 
 # ----------------------------------------------------------------------
 def main() -> int:
-    ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    ap = argparse.ArgumentParser(description="Turn the gathered summary CSVs into booktabs LaTeX fragments")
     ap.add_argument("--out", default=os.path.join(REPO, "hpc_analysis", "tex_tables"),
                     help="directory for the .tex fragments (e.g. the thesis tables/sim dir); "
                          "'standard/' and 'mixture/' subfolders are created inside it")

@@ -1,18 +1,7 @@
-"""
-Single-run diagnostic plots, read straight from a run's saved per-run summary CSVs
-(the out[-test]/delta_summary/<run_key>.csv and beta_summary/<run_key>.csv that each
-fit writes). Where plot_recovery.py pools many runs into cross-sampler boxplots, this
-module zooms into ONE run to eyeball whether a single fit recovered its parameters -
-the natural "did the per-run save work?" check.
-
-`plot_delta_bias_single_run` plots, for one run, the bias (post_mean - true_value) of
-every Delta element with its 95% credible interval drawn relative to truth: the dashed
-line at 0 is the true value, so an interval crossing 0 means the true Delta element is
-inside the 95% CI (recovered), and the point shows the signed bias and its direction.
-
-Run from the repo root with the project venv:
-    .venv/Scripts/python.exe hpc_analysis/plot_single_run.py
-"""
+# One-run sanity plots straight from a run's saved summary CSVs
+# (out[-test]/delta_summary/<run_key>.csv). plot_recovery.py pools
+# many runs; this zooms into ONE fit - "did the per-run save work?".
+# run: .venv/Scripts/python.exe hpc_analysis/mixture_models/plot_single_run.py
 from __future__ import annotations
 
 from pathlib import Path
@@ -38,12 +27,10 @@ REPO = Path(__file__).resolve().parents[2]
 DIR_FIG = Path(__file__).resolve().parent / "out"
 
 
+# testing=None tries out/ then out-test/; True/False forces one.
+# first match wins - a run_key is unique to one job.
 def find_summary_csv(run_key: str, kind: str = "delta", testing: Optional[bool] = None,
                      repo: Path = REPO) -> Path:
-    """Locate a run's per-run summary CSV: jobs/*/{out|out-test}/<kind>_summary/<run_key>.csv.
-
-    testing=None searches real `out/` first then `out-test/`; True/False forces one.
-    Returns the first match (a run_key is unique to one job)."""
     outs = ["out", "out-test"] if testing is None else (["out-test"] if testing else ["out"])
     for out in outs:
         hits = sorted(repo.glob(f"jobs/*/{out}/{kind}_summary/{run_key}.csv"))
@@ -55,17 +42,11 @@ def find_summary_csv(run_key: str, kind: str = "delta", testing: Optional[bool] 
     )
 
 
+# bias = post_mean - true_value per Delta element (D*P rows).
+# dashed 0 = zero bias; above over-, below under-estimates. no CIs.
 def plot_delta_bias_single_run(run_key: str = "kt1_s01__k5_nuts_c1", *,
                                testing: Optional[bool] = None,
                                save_fig: bool = True) -> ggplot:
-    """Plot per-element Delta bias for ONE run.
-
-    Reads that run's saved delta_summary/<run_key>.csv (8 rows = D*P elements) and plots
-    bias = post_mean - true_value for each Delta element, one point per element. The
-    dashed line at 0 marks zero bias (the element's posterior mean equals truth); points
-    above it overestimate the true value, points below underestimate it. No credible-
-    interval information is shown - just the bias per parameter.
-    """
     csv = find_summary_csv(run_key, "delta", testing)
     df = pd.read_csv(csv)
     if df.empty:

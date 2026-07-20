@@ -1,33 +1,8 @@
-"""
-Convergence diagnostics of the marginal comparison, standard_model.
-
-Source: data/out/standard_model/marginal_diagnostics.csv (src.summaries_standard ->
-marginal_comparison.functional_diagnostics). With K = 1 there is no label switching, so
-these Goose-identical arviz diagnostics (the exact az.rhat / az.ess calls
-liesel.goose.summary_m makes) of grid-free scalar FUNCTIONALS of each per-draw marginal
-N(mu, Sigma) sit alongside the directly meaningful per-parameter diagnostics in
-convergence.csv. One row per (param, functional), functional in {mean, sd, q05, q50, q95}:
-
-  * Rhat            - rank-normalised split-R-hat.
-  * ESS_bulk        - bulk effective sample size (central mixing).
-  * ESS_tail        - tail effective sample size (5%/95% quantile mixing).
-  * ESS_bulk/s,
-    ESS_tail/s      - effective draws per fit-second (ESS / total wall-clock incl. warmup,
-                      from meta.json runtime_s) - the cross-sampler EFFICIENCY metric.
-                      Renamed ESS_bulk_per_s / ESS_tail_per_s on load ('/' would parse as
-                      a division inside plotnine aes()).
-
-The old grid-based density-series / moment-series ESS/R-hat (min_ESS, max_Rhat, kind,
-grid columns) were replaced upstream by these functional diagnostics; this module reads
-the new schema only. Read ESS only where R-hat ~ 1.
-
-Thresholds: R-hat <= 1.1 is the study-wide convergence gate; ESS >= 400 is the
-rule-of-thumb target for a stable functional estimate. Both are drawn as reference lines
-and reported as pass-rates.
-
-Run from the repo root with the project venv:
-    .venv/Scripts/python.exe hpc_analysis/standard_model/marginal_diag.py
-"""
+# ESS/R-hat of scalar functionals (mean/sd/q05/q50/q95) of each per-draw
+# marginal N(mu, Sigma); reads data/out/standard_model/marginal_diagnostics.csv.
+# Same az.rhat/az.ess calls as liesel.goose.summary_m; K=1, no relabeling.
+# Gates: R-hat <= 1.1, ESS >= 400; only read ESS where R-hat ~ 1.
+# run: .venv/Scripts/python.exe hpc_analysis/standard_model/marginal_diag.py
 from __future__ import annotations
 
 import sys
@@ -92,10 +67,9 @@ def _out_base() -> Path:
 # --------------------------------------------------------------------------------- #
 # Load.
 # --------------------------------------------------------------------------------- #
+# ESS_*/s = ESS / total wall-clock incl. warmup (meta runtime_s); renamed
+# *_per_s on load because '/' parses as a division inside plotnine aes()
 def load_diag(n_chains: int = 2, df: Optional[pd.DataFrame] = None) -> pd.DataFrame:
-    """Return the functional-diagnostics frame for the given chain count, with the
-    ESS-per-second columns renamed to plotnine-safe identifiers ('/' parses as a
-    division inside aes())."""
     d = load_recovery("marginal_diagnostics") if df is None else df.copy()
     d = d.rename(columns={"ESS_bulk/s": "ESS_bulk_per_s", "ESS_tail/s": "ESS_tail_per_s"})
     d = d[d["n_chains"] == n_chains].copy()
@@ -180,9 +154,8 @@ def plot_ess_tail_per_s_grid(n_chains: int = 2, df: Optional[pd.DataFrame] = Non
 # --------------------------------------------------------------------------------- #
 # Tables.
 # --------------------------------------------------------------------------------- #
+# median/q75/max R-hat + pass-rate frac(R-hat <= 1.1) per cell
 def rhat_summary_table(n_chains: int = 2, d: Optional[pd.DataFrame] = None) -> pd.DataFrame:
-    """Per (functional, param, sampler): median / q75 / max R-hat and the convergence
-    pass-rate frac(R-hat <= 1.1)."""
     d = load_diag(n_chains) if d is None else d
     g = d.dropna(subset=["Rhat"]).groupby(["functional", "param", "sampler"], observed=True)["Rhat"]
     out = g.agg(median_rhat="median", q75_rhat=lambda s: s.quantile(0.75), max_rhat="max",
@@ -190,9 +163,8 @@ def rhat_summary_table(n_chains: int = 2, d: Optional[pd.DataFrame] = None) -> p
     return _finish(out, ["median_rhat", "q75_rhat", "max_rhat", "frac_converged"])
 
 
+# ESS medians, frac(ESS_bulk >= 400), median ESS/s (efficiency) per cell
 def ess_summary_table(n_chains: int = 2, d: Optional[pd.DataFrame] = None) -> pd.DataFrame:
-    """Per (functional, param, sampler): bulk/tail ESS medians and the frac(ESS_bulk >= 400)
-    pass-rate, plus the median bulk/tail ESS per fit-second (efficiency)."""
     d = load_diag(n_chains) if d is None else d
     g = d.groupby(["functional", "param", "sampler"], observed=True)
     out = g.agg(median_ess_bulk=("ESS_bulk", "median"),
