@@ -1,133 +1,157 @@
-# A Template for Reproducible Experimentation
+# Sampler comparison for hierarchical Bayesian multinomial logit models
 
-This repository holds reproducible experimentation code for 
-research in statistics/machine learning.
+This repository holds the computational harness for a simulation study that compares
+MCMC samplers for hierarchical Bayesian multinomial logit (HBMNL) models with
+mixture-of-normals heterogeneity. Every fit is an independent job run on an HPC
+cluster; the per-run outputs are gathered into tidy tables and turned into the figures
+and tables reported in the thesis.
 
-It supports a robust research workflow that allows for rapid experimentation 
-by running independent jobs in parallel on a remote high performance cluster, while
-at the same time requiring minimal post-processing for being shared for review and
-as a code archive accompanying publications.
+The statistical model, samplers and marginal-comparison metrics are vendored verbatim
+from the study repository
+[HierarchicalBayesianMultinomialLogit](https://github.com/Paul-Jarschke/HierarchicalBayesianMultinomialLogit)
+so this harness reproduces the study without depending on that repo. See
+[`src/README.md`](src/README.md) for what is vendored and what is harness glue.
+
+## The two studies
+
+Both use the same DGP family (300 decision units, 30 choice tasks each, 4 alternatives,
+2 demographic covariates), 100 replicate datasets per condition, and 2 chains per fit.
+
+**Mixture study** (jobs `100`-`103`). A 5-component mixture is fitted (`K_MODEL = 5`)
+to data generated with `k_true` in {1, 2, 3, 5} (scenarios `1comp`, `2comp_equal`,
+`3comp_equal`, `5comp_equal`), so the model is correctly specified in one cell and
+overspecified in the others. Four samplers, 400 runs each:
+
+| Job | Sampler |
+|-----|---------|
+| `100_mixture_bayesm` | `bayesm::rhierMnlRwMixture` (R, the reference implementation) |
+| `101_mixture_replicate` | a line-faithful JAX/Goose port of that Gibbs sampler ("Replication") |
+| `102_mixture_hmc` | HMC |
+| `103_mixture_nuts` | NUTS |
+
+**Standard study** (jobs `200`-`202`). A single normal heterogeneity component
+(`k_true = K_MODEL = 1`, Rossi 2006 section 5.4), which removes label switching and
+makes mu and Sigma directly interpretable. Three samplers (`bayesm`, `hmc`, `nuts`),
+100 runs each.
+
+Because the mixture posterior is invariant to component relabeling, the mixture
+analysis is built on label-invariant quantities (Delta, the marginal heterogeneity
+distribution, ECR-relabeled weights) rather than per-component parameters.
 
 ## Repository contents
 
-- `jobs/` contains subdirectories that hold individual compute jobs in `run.qmd` Quarto
-   or `run.ipynb` Jupyter notebooks. The parameters for each job run are defined
-   in a `params.csv` file, where each row defines the parameters for one run of 
-   `run.qmd`.
-- `data/in/` contains input data (if available).
-- `data/out/` contains output data, collected from the outputs of the individual jobs.
-- `analysis/` contains R or Python scripts and notebooks for analysis of the data in `data/out`.
-- `analysis/out/` contains the output of data analysis, e.g., figures and tables.
-- `scripts/` contains general helper scripts for running jobs, submitting jobs to a 
-   cluster, download data, and gather data.
-- `guides/` contains user guides.
+- `jobs/` - one directory per compute job. Each holds `run.qmd` (the notebook executed
+  once per row of `params.csv`), `params.R` (builds `params.csv` from the dataset
+  manifest), `resources.json` (SLURM resources) and `hpc/` (job-script template).
+- `data/dgp/` - the vendored data-generating process (do not edit, see
+  [`data/dgp/VENDORED.md`](data/dgp/VENDORED.md)).
+- `data/generate_mixture_data.py`, `data/generate_standard_data.py` - deterministic
+  dataset generators; they write `data/in/<experiment>/` plus a `manifest.csv`.
+- `data/in/` - generated input datasets. `data/out/` - gathered per-run tables
+  (`mixture_c2/`, `standard_model/`).
+- `src/` - model, samplers and summary code shared by all jobs.
+- `hpc_analysis/` - the analysis pipeline (figures, CSV tables, LaTeX fragments), one
+  subfolder per study. See [`hpc_analysis/README.md`](hpc_analysis/README.md).
+- `scripts/` - helpers to run, submit, download and gather jobs.
+- `guides/` - HPC setup and workflow guides.
+- [`Documentation.md`](Documentation.md) - notable data/modelling issues and how they
+  are handled.
 
-## How to reproduce analyses
+## Reproducing the analysis
 
-Analyses can be reproduced by running the R scripts in `analysis/`.
+This is the cheap path: it reads the gathered tables in `data/out/` and rewrites every
+figure and table. Nothing is refitted.
 
-## How to reproduce experiments
+```shell
+# mixture study
+.venv/Scripts/python.exe hpc_analysis/mixture_models/make_tables.py
+.venv/Scripts/python.exe hpc_analysis/mixture_models/make_plots.py
+
+# standard study
+.venv/Scripts/python.exe hpc_analysis/standard_model/make_tables.py
+.venv/Scripts/python.exe hpc_analysis/standard_model/make_plots.py
+
+# LaTeX table fragments for the thesis
+.venv/Scripts/python.exe hpc_analysis/make_tex_tables.py
+```
+
+Figures and CSV tables land in `hpc_analysis/<study>/out/`, LaTeX fragments in
+`hpc_analysis/tex_tables/`. On Linux/macOS use `.venv/bin/python` instead.
+
+## Reproducing the experiments
 
 ### Environment setup
 
-This repository supports projects that rely on R and Python, and even
-projects that mix R and Python in Quarto notebooks. To keep dependency management of
-R and Python packages as simple as possible, it defaults to using the R package 
-[`renv`](https://rstudio.github.io/renv/).
-
-To restore both a working R and Python environment to run the code in this repository,
-first start an interactive R session in the project directory:
+R and Python dependencies are both managed through
+[`renv`](https://rstudio.github.io/renv/). Start an R session in the project directory
+(this bootstraps `renv`):
 
 ```shell
 R
 ```
 
-This will bootstrap the `renv` package automatically. Then, in the active R console,
-run the command:
+and restore both environments:
 
 ```r
 renv::restore()
 ```
 
-This will install the R packages listed in `renv.lock` and the Python packages listed
-in `requirements.txt`.
+This installs the R packages from `renv.lock` and the Python packages from
+`requirements.txt` into `.venv/`. Activate the Python environment with
+`source .venv/bin/activate` (Linux/macOS) or `.venv\Scripts\activate` (Windows).
 
-### Activate virtual environment
+### Generate the input data
 
-After the environments are prepared, activate the Python environment:
+The generators are deterministic in the dataset seed, so the datasets can always be
+rebuilt instead of downloaded:
 
 ```shell
-source .venv/bin/activate
+python data/generate_mixture_data.py     # -> data/in/k5model_mixture/
+python data/generate_standard_data.py    # -> data/in/standard_model/
 ```
 
-The command for virtual environment activation may differ on Windows.
+Each writes a `manifest.csv` that the jobs' `params.R` reads to build `params.csv`.
 
-### Execute an individual run of an individual job locally
+### Run the jobs
 
-This is the most feasible immediate way to execute the code in this repository.
+A single run, interactively: open the job's `run.qmd`, point the `JOB_ROW` parameter at
+the row of `params.csv` you want, set `JOB_TESTING` to `False`, and render it
+(`quarto render run.qmd`).
 
-1. Open the `run.qmd` file in the job directory that you want to run code from. 
-2. Adjust the default value of the notebook parameter `JOB_ROW` to point to the specific row in `params.csv`
-   that you want to execute the job with.
-3. Change the default value of the notebook parameter `JOB_TESTING` to `False`.
-4. Run the notebook interactively cell-by-cell, or render it as a whole 
-   by calling `quarto render run.qmd`.
-
-### Execute all runs of one or more selected jobs locally
-
-You can execute all jobs on this directory in sequence using the following command:
+Selected jobs in sequence, locally (set `JOB_PREFIXES` inside the script first):
 
 ```shell
 python scripts/run_jobs_locally.py
 ```
 
-In `scripts/run_jobs_locally.py`, you can specify which jobs to execute by changing
-the job prefixes listed in the variable
-
-```python
-JOB_PREFIXES = ["001", "002"]
-```
-
-Note that this may take a long time to finish. If you really
-want to reproduce all computations exactly, you may want to follow `hpc_setup.md`
-to run the computations on an HPC.
-
-
-### Execute all jobs locally
-
-You can execute all jobs on this directory in sequence using the following command:
+All jobs on an HPC (this is how the study was actually run; 1900 fits in total):
 
 ```shell
-python scripts/run_all_jobs_locally.py
+python scripts/submit_all.py      # after completing guides/hpc_setup.md
+python scripts/download_all.py    # once the arrays have finished
 ```
 
-Note that, in most cases, this will take a long time to finish. If you really
-want to reproduce all computations exactly, you may want to follow `hpc_setup.md`
-to run the computations on an HPC.
+### Gather the per-run outputs
 
-### Execute all jobs on an HPC
-
-1. Complete the setup as described in `hpc_setup.md`. This guide includes assumptions
-   about the specific HPC being used, but much of that can probably be adapted to your
-   resources, as long as your HPC also uses slurm for job management.
-2. Submit all jobs via 
+Each run writes small tidy CSVs; the gather step concatenates them per study:
 
 ```shell
-python scripts/submit_all.py
+# mixture study (these are the script defaults) -> data/out/mixture_c2/
+python scripts/gather_summaries.py
+
+# standard study -> data/out/standard_model/
+python scripts/gather_summaries.py --glob "jobs/20[0-2]-standard-*" --out-name standard_model
 ```
 
-3. After completion, download the data via
+After this the analysis scripts above can be run.
 
-```shell
-python scripts/download_all.py
-```
+## Known data issue
 
-### Gather data
-
-Gather the data produced by the individual jobs by running the R code in `scripts/gather_out_greedy.R` (one .csv per output type; fewer files) or `scripts/gather_out_lazy.R` (one .csv per job and output type; more files) in an interactive R session. Whether you need to run the greedy or the lazy script depends on the data format expected by the analysis scripts.
-
-Now the data is in a state that serves as the starting point for the R scripts in `analysis/`. 
-
+One generated dataset (`kt1_s70`) cannot be fitted by `bayesm`, because only 3 of the 4
+alternatives are ever chosen and `rhierMnlRwMixture` requires all of them. It is
+screened out at generation time and backfilled from a spare seed, so every sampler is
+compared on the same 100 datasets per scenario. The full account is in
+[`Documentation.md`](Documentation.md).
 
 ## Attribution
 
