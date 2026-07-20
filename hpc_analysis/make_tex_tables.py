@@ -205,7 +205,7 @@ def _recovery_table(out: str, name: str, df: pd.DataFrame, elem_col: str, has_kt
         return cells
 
     lead = ("$K_{\\text{true}}$ & " if has_kt else "")
-    elem_hdr = "Coefficient" if "\\Delta" in _tex_label(df[elem_col].iloc[0]) or elem_col == "param" else "Element"
+    elem_hdr = "Coef." if "\\Delta" in _tex_label(df[elem_col].iloc[0]) or elem_col == "param" else "Element"
     header = (lead + f"{elem_hdr} & Sampler & Bias (MCSE) & MSE (MCSE)"
               + "".join(f" & {h}" for h in extra_hdr))
     colspec = ("c" if has_kt else "") + "ll" + "c" * (2 + len(extra))
@@ -300,9 +300,9 @@ def delta_sd(out: str, root: str, has_kt: bool) -> None:
         for kt in sorted(df["k_true"].unique()):
             sub = df[df["k_true"] == kt].drop(columns="k_true")
             _dist_table(out, f"delta_sd_kt{int(kt)}.tex", sub, ["element"], [_tex_label],
-                        "Coefficient", has_kt=False)
+                        "Coef.", has_kt=False)
     else:
-        _dist_table(out, "delta_sd.tex", df, ["element"], [_tex_label], "Coefficient", has_kt)
+        _dist_table(out, "delta_sd.tex", df, ["element"], [_tex_label], "Coef.", has_kt)
 
 
 def runtime(out: str, root: str, has_kt: bool) -> None:
@@ -333,10 +333,10 @@ def marginal_distances(out: str, root: str, has_kt: bool, grid: str) -> None:
         for kt in sorted(df["k_true"].unique()):
             sub = df[df["k_true"] == kt].drop(columns="k_true")
             _dist_table(out, f"marginal_distances_{grid}_kt{int(kt)}.tex", sub, [m, p],
-                        [str, _tex_escape], "Metric & Coefficient", has_kt=False, nd=4)
+                        [str, _tex_escape], "Metric & Coef.", has_kt=False, nd=4)
     else:
         _dist_table(out, f"marginal_distances_{grid}.tex", df, [m, p],
-                    [str, _tex_escape], "Metric & Coefficient", has_kt, nd=4)
+                    [str, _tex_escape], "Metric & Coef.", has_kt, nd=4)
 
 
 def retained_mass(out: str, root: str, has_kt: bool) -> None:
@@ -348,7 +348,7 @@ def retained_mass(out: str, root: str, has_kt: bool) -> None:
     if not _need(df, "retained mass", p, _col(df, "sampler")):
         return
     fb = _col(df, "frac_below_guarantee")
-    _dist_table(out, "retained_mass.tex", df, [p], [_tex_escape], "Coefficient", has_kt,
+    _dist_table(out, "retained_mass.tex", df, [p], [_tex_escape], "Coef.", has_kt,
                 nd=4, extra=([fb] if fb else ()), extra_hdr=("frac $<0.96$" if fb else ""))
 
 
@@ -382,7 +382,7 @@ def kl_inf(out: str, root: str, has_kt: bool) -> None:
         def value_fn(r):
             return [str(r["sampler"]), str(int(r[ni])), str(int(r[nt])), _num(r[ir], 3)]
 
-        header = "Grid & Coefficient & Sampler & $n_\\infty$ & $n$ & rate"
+        header = "Grid & Coef. & Sampler & $n_\\infty$ & $n$ & rate"
         _emit(out, "kl_inf.tex", "lll" + "ccc", header,
               _grouped_rows(df, ["grid", p], [str, _tex_escape], value_fn))
         return
@@ -399,7 +399,7 @@ def kl_inf(out: str, root: str, has_kt: bool) -> None:
     def value_fn(r):
         return [str(r["sampler"])] + [str(int(r[k])) for k in kts]
 
-    header = ("Grid & Coefficient & Sampler & "
+    header = ("Grid & Coef. & Sampler & "
               + " & ".join(f"$K_{{\\text{{true}}}}{{=}}{k}$" for k in kts))
     colspec = "ll" + "l" + "c" * len(kts)
     _emit(out, "kl_inf.tex", colspec, header,
@@ -435,7 +435,7 @@ def convergence_rhat(out: str, data_root: str, has_kt: bool) -> None:
                 _num(r_["med_b"], 0), _num(r_["med_t"], 0)]
 
     lead = "$K_{\\text{true}}$ & " if has_kt else ""
-    header = (lead + "Coefficient & Sampler & median $\\widehat{R}$ & "
+    header = (lead + "Coef. & Sampler & median $\\widehat{R}$ & "
               "frac.\\ $\\widehat{R}\\leq1.1$ & median ESS (bulk) & median ESS (tail)")
     group_cols = (["k_true"] if has_kt else []) + [p]
     group_fmt = ([lambda v: str(int(v))] if has_kt else []) + [_tex_escape]
@@ -466,7 +466,7 @@ def convergence_ess(out: str, root: str, has_kt: bool) -> None:
         return [str(r["sampler"]), _num(r[mb], 0), _num(r[mt], 0)]
 
     lead = ("$K_{\\text{true}}$ & " if has_kt else "")
-    header = lead + "Coefficient & Sampler & median ESS (bulk) & median ESS (tail)"
+    header = lead + "Coef. & Sampler & median ESS (bulk) & median ESS (tail)"
     colspec = ("c" if has_kt else "") + "ll" + "cc"
     _emit(out, "convergence_ess.tex", colspec, header, _grouped_rows(df, group_cols, group_fmt, value_fn))
 
