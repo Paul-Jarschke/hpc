@@ -459,22 +459,19 @@ def component_recovery(out: str) -> None:
     if df is None:
         return
     kt, s = _col(df, "k_true"), _col(df, "sampler")
-    mk, mek = _col(df, "mean_k_eff"), _col(df, "median_k_eff")
-    sk, mest = _col(df, "sd_k_eff"), _col(df, "mean_est_k")
-    fco, fov, fun = _col(df, "frac_correct"), _col(df, "frac_over"), _col(df, "frac_under")
-    if not _need(df, "component recovery", kt, s, mk, mest, fco):
+    mink, q1k = _col(df, "min_k_eff"), _col(df, "q1_k_eff")
+    meank, medk = _col(df, "mean_k_eff"), _col(df, "median_k_eff")
+    q3k, maxk = _col(df, "q3_k_eff"), _col(df, "max_k_eff")
+    if not _need(df, "component recovery", kt, s, mink, q1k, meank, medk, q3k, maxk):
         return
     df = _samp_ordered(df).sort_values([kt, "sampler"], kind="stable")
 
     def value_fn(r):
-        return [str(r["sampler"]), _num(r[mk], 3), _num(r[mek], 3) if mek else "{--}",
-                _num(r[sk], 3) if sk else "{--}", _num(r[mest], 3),
-                _num(r[fco], 3), _num(r[fov], 3) if fov else "{--}",
-                _num(r[fun], 3) if fun else "{--}"]
+        return [str(r["sampler"]), _num(r[mink], 3), _num(r[q1k], 3), _num(r[meank], 3),
+                _num(r[medk], 3), _num(r[q3k], 3), _num(r[maxk], 3)]
 
-    header = ("$K_{\\text{true}}$ & Sampler & mean $K_{\\text{eff}}$ & median $K_{\\text{eff}}$ "
-              "& SD $K_{\\text{eff}}$ & mean $\\hat K$ & frac.\\ correct & frac.\\ over & frac.\\ under")
-    _emit(out, "component_recovery.tex", "clccccccc", header,
+    header = ("$K_{\\text{true}}$ & Sampler & min & Q1 & mean & median & Q3 & max")
+    _emit(out, "component_recovery.tex", "clcccccc", header,
           _grouped_rows(df, [kt], [lambda v: str(int(v))], value_fn))
 
 

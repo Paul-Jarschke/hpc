@@ -127,8 +127,12 @@ def recovery_summary_table(n_chains: int = 2, runs: Optional[pd.DataFrame] = Non
     def _agg(gp: pd.DataFrame) -> pd.Series:
         return pd.Series({
             "n_sim":            len(gp),
+            "min_k_eff":        gp["k_eff"].min(),
+            "q1_k_eff":         gp["k_eff"].quantile(0.25),
             "mean_k_eff":       gp["k_eff"].mean(),
             "median_k_eff":     gp["k_eff"].median(),
+            "q3_k_eff":         gp["k_eff"].quantile(0.75),
+            "max_k_eff":        gp["k_eff"].max(),
             "sd_k_eff":         gp["k_eff"].std(ddof=1),
             "mean_est_k":       gp[PRIMARY_COL].mean(),
             "frac_correct":     gp["correct"].mean(),
@@ -141,7 +145,8 @@ def recovery_summary_table(n_chains: int = 2, runs: Optional[pd.DataFrame] = Non
     out = (runs.groupby(["k_true", "sampler"], observed=True).apply(_agg, include_groups=False)
            .reset_index())
     out = _order_samplers(out)
-    num = ["mean_k_eff", "median_k_eff", "sd_k_eff", "mean_est_k",
+    num = ["min_k_eff", "q1_k_eff", "mean_k_eff", "median_k_eff", "q3_k_eff", "max_k_eff",
+           "sd_k_eff", "mean_est_k",
            "frac_correct", "frac_over", "frac_under", "frac_correct_keff", "mean_est_k_ci"]
     out[num] = out[num].round(3)
     return out.sort_values(["k_true", "sampler"]).reset_index(drop=True)
