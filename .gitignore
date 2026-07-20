@@ -8,11 +8,12 @@ __pycache__/
 *.pyc
 .quarto/
 /.quarto/
-data/in
-data/out
 .vscode
 .env
 *.csv
+!data/in/**/*.csv
+!data/out/**/*.csv
+data/out/*/beta_summary.csv
 CLAUDE.md
 USAGE.md
 */*/hpc/sbatch.sh
