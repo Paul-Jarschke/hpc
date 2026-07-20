@@ -621,23 +621,21 @@ def agg_convergence(out: str, data_root: str, has_kt: bool) -> None:
     df = _samp_ordered(df)
     keys = (["k_true"] if has_kt else []) + ["sampler"]
     agg = (df.groupby(keys, observed=True)
-             .agg(rmean=(r, "mean"), rmed=(r, "median"), rmax=(r, "max"),
+             .agg(rmed=(r, "median"),
                   rfrac=(r, lambda x: (x.dropna() <= 1.1).mean()),
                   med_b=(eb, "median"), med_t=(et, "median")).reset_index()
              .sort_values(keys, kind="stable"))
 
     def value_fn(r_):
-        return [str(r_["sampler"]), _num(r_["rmean"], 3), _num(r_["rmed"], 3),
-                _num(r_["rmax"], 3), _num(r_["rfrac"], 2),
+        return [str(r_["sampler"]), _num(r_["rmed"], 3), _num(r_["rfrac"], 2),
                 _num(r_["med_b"], 0), _num(r_["med_t"], 0)]
 
     lead = "$K_{\\text{true}}$ & " if has_kt else ""
-    header = (lead + "Sampler & mean $\\widehat{R}$ & median $\\widehat{R}$ & "
-              "max $\\widehat{R}$ & frac.\\ $\\widehat{R}\\leq1.1$ & "
+    header = (lead + "Sampler & median $\\widehat{R}$ & frac.\\ $\\widehat{R}\\leq1.1$ & "
               "median ESS (bulk) & median ESS (tail)")
     group_cols = ["k_true"] if has_kt else []
     group_fmt = [lambda v: str(int(v))] if has_kt else []
-    _emit(out, "agg_convergence.tex", ("c" if has_kt else "") + "l" + "c" * 6, header,
+    _emit(out, "agg_convergence.tex", ("c" if has_kt else "") + "l" + "c" * 4, header,
           _grouped_rows(agg, group_cols, group_fmt, value_fn))
 
 
