@@ -316,7 +316,7 @@ def delta_bias_faceted_by_element(n_chains: int = 2, df=None, *, jitter: bool = 
          + facet_wrap("element", ncol=4, scales="free_y", labeller="label_value")
          + scale_color_manual(values=color_vals, labels=[SAMPLER_LABELS.get(s, s) for s in sampler_order])
          + scale_x_discrete(labels=[SAMPLER_LABELS.get(s, s) for s in sampler_order])
-         + labs(x="Sampler", y="Empirical bias", color="Sampler",
+         + labs(x="Sampler", y="$\\hat{\\theta}_i - \\theta$", color="Sampler",
                 title="Bias of Δ - Standard Model")
          + theme_bw()
          + theme(figure_size=(14, 7), axis_text_x=element_text(size=8),
@@ -396,7 +396,7 @@ def delta_mse_faceted_by_element(n_chains: int = 2, df=None, *, jitter: bool = T
          + scale_color_manual(values=color_vals,
                               labels=[SAMPLER_LABELS.get(s, s) for s in sampler_order])
          + scale_x_discrete(labels=[SAMPLER_LABELS.get(s, s) for s in sampler_order])
-         + labs(x="Sampler", y="Mean Squared Error (MSE)", color="Sampler",
+         + labs(x="Sampler", y="Squared error", color="Sampler",
                 title="Squared error of Δ - Standard Model")
          + theme_bw()
          + theme(figure_size=(14, 7), axis_text_x=element_text(size=8),
@@ -450,7 +450,7 @@ def mu_bias_by_param(n_chains: int = 2, df=None, *, jitter: bool = True) -> ggpl
     sub["sampler"] = pd.Categorical(sub["sampler"], categories=sampler_order, ordered=True)
     counts = sub.groupby("sampler", observed=True)["data_seed"].nunique().to_dict()
     print(f"[mu_bias_by_param] n_chains={n_chains}: seeds/sampler={counts}")
-    return _param_boxplot(sub, "bias", "Empirical bias",
+    return _param_boxplot(sub, "bias", "$\\hat{\\theta}_i - \\theta$",
                           "Bias of μ - Standard Model", sampler_order, jitter=jitter)
 
 
@@ -465,7 +465,7 @@ def mu_mse_by_param(n_chains: int = 2, df=None, *, jitter: bool = True) -> ggplo
     sub["sampler"] = pd.Categorical(sub["sampler"], categories=sampler_order, ordered=True)
     counts = sub.groupby("sampler", observed=True)["data_seed"].nunique().to_dict()
     print(f"[mu_mse_by_param] n_chains={n_chains}: seeds/sampler={counts}")
-    return _param_boxplot(sub, "sq_error", "Mean Squared Error (MSE)",
+    return _param_boxplot(sub, "sq_error", "Squared error",
                           "Squared error of μ - Standard Model", sampler_order, jitter=jitter)
 
 
@@ -503,7 +503,7 @@ def sigma_bias_faceted_by_element(n_chains: int = 2, df=None, *, jitter: bool = 
          + facet_grid(rows="row", cols="col", scales="free_y", labeller="label_value")
          + scale_color_manual(values=color_vals, labels=[SAMPLER_LABELS.get(s, s) for s in sampler_order])
          + scale_x_discrete(labels=[SAMPLER_LABELS.get(s, s) for s in sampler_order])
-         + labs(x="Sampler", y="Empirical bias", color="Sampler",
+         + labs(x="Sampler", y="$\\hat{\\theta}_i - \\theta$", color="Sampler",
                 title="Error of Σ Elements (lower triangle) - Standard Model")
          + theme_bw()
          + theme(figure_size=(12, 10), axis_text_x=element_text(size=8),
@@ -540,7 +540,7 @@ def sigma_mse_faceted_by_element(n_chains: int = 2, df=None, *, jitter: bool = T
          + facet_grid(rows="row", cols="col", scales="free_y", labeller="label_value")
          + scale_color_manual(values=color_vals, labels=[SAMPLER_LABELS.get(s, s) for s in sampler_order])
          + scale_x_discrete(labels=[SAMPLER_LABELS.get(s, s) for s in sampler_order])
-         + labs(x="Sampler", y="Mean Squared Error (MSE)", color="Sampler",
+         + labs(x="Sampler", y="Squared error", color="Sampler",
                 title="Squared error of Σ Elements (lower triangle) - Standard Model")
          + theme_bw()
          + theme(figure_size=(12, 10), axis_text_x=element_text(size=8),

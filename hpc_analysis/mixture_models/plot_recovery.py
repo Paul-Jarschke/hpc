@@ -304,7 +304,7 @@ def delta_bias_faceted_by_element(n_chains: int = 2, k_true: int = 1,
          + facet_wrap("element", ncol=4, scales="free_y", labeller="label_value")
          + scale_color_manual(values=color_vals, labels=[SAMPLER_LABELS.get(s, s) for s in sampler_order])
          + scale_x_discrete(labels=[SAMPLER_LABELS.get(s, s) for s in sampler_order])
-         + labs(x="Sampler", y="Empirical bias", color="Sampler",
+         + labs(x="Sampler", y="$\\hat{\\theta}_i - \\theta$", color="Sampler",
                 title=f"Bias of Δ - {n_comp}")
          + theme_bw()
          + theme(figure_size=(14, 7), axis_text_x=element_text(size=8),
@@ -389,7 +389,7 @@ def delta_mse_faceted_by_element(n_chains: int = 2, k_true: int = 1,
          + facet_wrap("element", ncol=4, scales="free_y", labeller="label_value")
          + scale_color_manual(values=color_vals, labels=[SAMPLER_LABELS.get(s, s) for s in sampler_order])
          + scale_x_discrete(labels=[SAMPLER_LABELS.get(s, s) for s in sampler_order])
-         + labs(x="Sampler", y="Mean Squared Error (MSE)", color="Sampler",
+         + labs(x="Sampler", y="Squared error", color="Sampler",
                 title=f"Squared error of Δ - {n_comp}")
          + theme_bw()
          + theme(figure_size=(14, 7), axis_text_x=element_text(size=8),
