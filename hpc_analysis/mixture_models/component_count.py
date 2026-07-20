@@ -60,6 +60,7 @@ from plotnine import (
     geom_ribbon,
     geom_vline,
     ggplot,
+    labeller,
     labs,
     position_dodge,
     scale_color_manual,
@@ -415,7 +416,8 @@ def plot_weight_profile_by_ktrue(n_chains: int = 2, df: Optional[pd.DataFrame] =
 
 def plot_weight_profile_before_after(n_chains: int = 2,
                                      df: Optional[pd.DataFrame] = None) -> ggplot:
-    """Ranked mean weight per slot BEFORE vs AFTER ECR (facet grid k_true x stage).
+    """Ranked MEAN weight per slot BEFORE vs AFTER ECR (facet grid k_true x stage;
+    mean lines only, no IQR band).
 
     Demonstrates why ECR is required for the count: before relabeling the per-slot means are
     smeared toward uniform (label switching), so every slot looks active; after relabeling the
@@ -426,25 +428,24 @@ def plot_weight_profile_before_after(n_chains: int = 2,
         raise ValueError(f"No pvec_means rows for n_chains={n_chains}.")
     sub = sub.rename(columns={"rank": "slot", "pvec_mean": "value"})
     prof = _weight_profile_frame(sub, group_extra=["stage"])
-    prof["stage"] = pd.Categorical(prof["stage"], categories=["before", "after"], ordered=True)
+    prof["stage"] = prof["stage"].map({"before": "Before", "after": "After"})
+    prof["stage"] = pd.Categorical(prof["stage"], categories=["Before", "After"], ordered=True)
 
     sampler_order = [s for s in SAMPLER_ORDER if s in set(prof["sampler"])]
     prof["sampler"] = pd.Categorical(prof["sampler"], categories=sampler_order, ordered=True)
     color_vals = [SAMPLER_COLORS[s] for s in sampler_order]
 
     p = (
-        ggplot(prof, aes(x="slot", y="mean", color="sampler", fill="sampler"))
-        + geom_ribbon(aes(ymin="lo", ymax="hi"), alpha=0.15, color="none")
+        ggplot(prof, aes(x="slot", y="mean", color="sampler"))
         + geom_line(size=0.8)
         + geom_point(size=1.4)
-        + facet_grid(rows="k_true", cols="stage", labeller="label_both")
+        + facet_grid(rows="k_true", cols="stage",
+                     labeller=labeller(rows="label_both", cols="label_value"))
         + scale_x_continuous(breaks=list(range(K_MODEL)))
         + scale_color_manual(values=color_vals,
                              labels=[SAMPLER_LABELS.get(s, s) for s in sampler_order])
-        + scale_fill_manual(values=color_vals,
-                            labels=[SAMPLER_LABELS.get(s, s) for s in sampler_order])
-        + labs(x="Component slot (descending weight)", y="Mean weight (π̂)",
-               color="Sampler", fill="Sampler",
+        + labs(x="Component slot (sorted by descending weight)", y="Mean weight (π̂)",
+               color="Sampler",
                title="Weight Profile: Before vs After ECR")
         + theme_bw()
         + theme(figure_size=(10, 10), axis_text_x=element_text(size=8),
